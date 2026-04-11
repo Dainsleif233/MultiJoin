@@ -1,6 +1,8 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import uuid
 import json
+import random
+import string
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -22,6 +24,10 @@ def handleProfile(self, entry, profile, winner_headers):
     if data.exists_d(pid, profile["name"]):
         suffix = f"_{entry}"
         name = f"{profile['name'][:max(0, 16 - len(suffix))]}{suffix}"
+        while data.exists_d(pid, name):
+            random_entry = "".join(random.choices(string.ascii_lowercase, k=len(entry)))
+            random_suffix = f"_{random_entry}"
+            name = f"{profile['name'][:max(0, 16 - len(random_suffix))]}{random_suffix}"
         profile["name"] = name
     data.update_d_by_a(pid, profile["name"])
 
