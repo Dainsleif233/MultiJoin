@@ -10,12 +10,15 @@ from libs.data import LightweightDataTable
 from entries import ENTRIES
 
 def handleProfile(self, entry, profile, winner_headers):
+    print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry}")
     data = LightweightDataTable("profiles.csv")
     pid = data.query_by_bc(entry, profile["id"])
     if pid == None:
         print(f"Profile {profile['name']} not found, adding new one")
         if data.exists_c(profile["id"]):
-            data.add(uuid.uuid4().hex, entry, profile["id"], profile["name"])
+            pid = uuid.uuid4().hex
+            data.add(pid, entry, profile["id"], profile["name"])
+            print(f"Profile {profile['id']} already exists, mapped to {pid}")
         else:
             data.add(profile["id"], entry, profile["id"], profile["name"])
     
@@ -28,6 +31,7 @@ def handleProfile(self, entry, profile, winner_headers):
             random_entry = "".join(random.choices(string.ascii_lowercase, k=len(entry)))
             random_suffix = f"_{random_entry}"
             name = f"{profile['name'][:max(0, 16 - len(random_suffix))]}{random_suffix}"
+        print(f"Profile {profile['name']} already exists, renaming to {name}")
         profile["name"] = name
     data.update_d_by_a(pid, profile["name"])
 
