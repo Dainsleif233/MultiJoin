@@ -18,7 +18,7 @@ def handleProfile(self, entry, profile, winner_headers):
         if data.exists_c(profile["id"]):
             pid = uuid.uuid4().hex
             data.add(pid, entry, profile["id"], profile["name"])
-            print(f"Profile {profile['id']} already exists, mapped to {pid}")
+            print(f"UUID {profile['id']} already exists, mapped to {pid}")
         else:
             data.add(profile["id"], entry, profile["id"], profile["name"])
     
@@ -31,7 +31,7 @@ def handleProfile(self, entry, profile, winner_headers):
             random_entry = "".join(random.choices(string.ascii_lowercase, k=len(entry)))
             random_suffix = f"_{random_entry}"
             name = f"{profile['name'][:max(0, 16 - len(random_suffix))]}{random_suffix}"
-        print(f"Profile {profile['name']} already exists, renaming to {name}")
+        print(f"Playername {profile['name']} already exists, renaming to {name}")
         profile["name"] = name
     data.update_d_by_a(pid, profile["name"])
 
@@ -110,7 +110,6 @@ class Handler(BaseHTTPRequestHandler):
                     pass
 
             if winner_id is not None:
-                print(f"Success to Fetch: {winner_id}")
                 # print(f"Winner headers: {winner_headers}")
                 # print(f"Winner data: {json.dumps(winner_data, ensure_ascii=False)}")
                 handleProfile(self, winner_id, winner_data, winner_headers)
