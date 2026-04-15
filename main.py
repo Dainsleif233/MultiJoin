@@ -3,12 +3,14 @@ import uuid
 import json
 import string
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from typing import Dict
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+from libs.config import load_entries
 from libs.data import ProfilesData
-from entries import ENTRIES
 
 MAX_PROFILE_NAME_LENGTH = 16
+ENTRIES = load_entries()
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -116,7 +118,7 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
             return candidate
         name = increment_name(name)
 
-def handleProfile(conn: Handler, entry_id, profile, winner_headers: dict[str, str]):
+def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, str]):
     print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
     data = ProfilesData("profiles.csv")
     pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
