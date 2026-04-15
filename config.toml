@@ -1,3 +1,5 @@
+alwaysFormat = false
+
 [[entries]]
 id = "union"
 api = "https://skin.mualliance.ltd/api/union/yggdrasil/sessionserver/session/minecraft/hasJoined"

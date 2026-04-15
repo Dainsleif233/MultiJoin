@@ -6,10 +6,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 from typing import Dict
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
-from libs.config import load_entries
+from libs.config import load_always_format, load_entries
 from libs.data import ProfilesData
 
 MAX_PROFILE_NAME_LENGTH = 16
+ALWAYS_FORMAT = load_always_format()
 ENTRIES = load_entries()
 
 class Handler(BaseHTTPRequestHandler):
@@ -133,9 +134,12 @@ def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, st
     
     pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
     profile["id"] = pid
-    if data.exists_name_except_profile(pid, profile["name"]):
+    if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
         name = make_unique_entry_name(data, pid, entry_id, profile["name"])
-        print(f"Playername {profile['name']} already exists, renaming to {name}")
+        if ALWAYS_FORMAT:
+            print(f"Playername {profile['name']} formatted to {name}")
+        else:
+            print(f"Playername {profile['name']} already exists, renaming to {name}")
         profile["name"] = name
     data.update_name_by_profile(pid, profile["name"])
 

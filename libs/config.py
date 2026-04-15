@@ -24,6 +24,14 @@ def load_config(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> dict
     return config
 
 
+def load_always_format(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> bool:
+    config = load_config(filepath)
+    always_format = config.get("alwaysFormat", False)
+    if not isinstance(always_format, bool):
+        raise ValueError("Config 'alwaysFormat' must be a boolean")
+    return always_format
+
+
 def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dict[str, Dict[str, str]]:
     config = load_config(filepath)
     entries = config.get("entries")
