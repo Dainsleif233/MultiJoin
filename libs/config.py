@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from string import Formatter
 from typing import Dict, Union
 
 try:
@@ -46,11 +47,16 @@ def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dic
             raise ValueError(f"Entry '{entry_id}' must define a non-empty api")
         if not isinstance(name_format, str) or not name_format:
             raise ValueError(f"Entry '{entry_id}' must define a non-empty format")
-
         try:
-            name_format.format(name="name", entry_id=entry_id)
-        except (IndexError, KeyError, ValueError) as e:
+            has_name_placeholder = any(
+                field_name is not None
+                and field_name.split(".", 1)[0].split("[", 1)[0] == "name"
+                for _, field_name, _, _ in Formatter().parse(name_format)
+            )
+        except ValueError as e:
             raise ValueError(f"Entry '{entry_id}' format is invalid: {e}") from e
+        if not has_name_placeholder:
+            raise ValueError(f"Entry '{entry_id}' format must contain '{{name}}'")
 
         result[entry_id] = {
             "api": api,

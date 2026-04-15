@@ -77,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b'{"path": "/hasJoined"}')
 
 def format_entry_name(entry_id, name):
-    return ENTRIES[entry_id]["format"].format(name=name, entry_id=entry_id)
+    return ENTRIES[entry_id]["format"].format(name=name, entry=entry_id)
 
 def truncate_name_for_entry(entry_id, name):
     while name and len(format_entry_name(entry_id, name)) > MAX_PROFILE_NAME_LENGTH:

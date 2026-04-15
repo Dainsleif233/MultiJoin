@@ -1,14 +1,14 @@
 [[entries]]
 id = "union"
 api = "https://skin.mualliance.ltd/api/union/yggdrasil/sessionserver/session/minecraft/hasJoined"
-format = "{name}_{entry_id}"
+format = "{name}_{entry}"
 
 [[entries]]
 id = "mojang"
 api = "https://sessionserver.mojang.com/session/minecraft/hasJoined"
-format = "{name}_{entry_id}"
+format = "{name}_{entry}"
 
 [[entries]]
 id = "visitor"
 api = "https://visitor.barrierslink.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined"
-format = "{name}_{entry_id}"
+format = "{name}_{entry}"
