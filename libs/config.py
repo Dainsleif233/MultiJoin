@@ -56,13 +56,19 @@ def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dic
         if not isinstance(name_format, str) or not name_format:
             raise ValueError(f"Entry '{entry_id}' must define a non-empty format")
         try:
-            has_name_placeholder = any(
-                field_name is not None
-                and field_name.split(".", 1)[0].split("[", 1)[0] == "name"
+            field_names = [
+                field_name.split(".", 1)[0].split("[", 1)[0]
                 for _, field_name, _, _ in Formatter().parse(name_format)
-            )
+                if field_name is not None
+            ]
         except ValueError as e:
             raise ValueError(f"Entry '{entry_id}' format is invalid: {e}") from e
+        invalid_fields = sorted(set(field_names) - {"name", "entry"})
+        if invalid_fields:
+            raise ValueError(
+                f"Entry '{entry_id}' format contains unsupported field(s): {', '.join(invalid_fields)}"
+            )
+        has_name_placeholder = "name" in field_names
         if not has_name_placeholder:
             raise ValueError(f"Entry '{entry_id}' format must contain '{{name}}'")
 

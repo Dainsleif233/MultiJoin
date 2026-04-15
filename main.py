@@ -15,7 +15,7 @@ ENTRIES = load_entries()
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/hasJoined"):
+        if self.path.startswith("/hasJoined?"):
             query_suffix = self.path[len("/hasJoined"):]
             targets = {entry_id: f"{entry['api']}{query_suffix}" for entry_id, entry in ENTRIES.items()}
             if not targets:
