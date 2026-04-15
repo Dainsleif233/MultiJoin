@@ -1,7 +1,6 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import uuid
 import json
-import random
 import string
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from urllib.error import HTTPError, URLError
@@ -9,64 +8,13 @@ from urllib.request import urlopen
 from libs.data import ProfilesData
 from entries import ENTRIES
 
-def handleProfile(self, entry, profile, winner_headers):
-    print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry}")
-    data = ProfilesData("profiles.csv")
-    pid = data.query_profile_by_entry_uuid(entry, profile["id"])
-    if pid == None:
-        print(f"Profile {profile['name']} not found, adding new one")
-        if data.exists_uuid(profile["id"]):
-            pid = uuid.uuid4().hex
-            data.add(pid, entry, profile["id"], profile["name"])
-            print(f"UUID {profile['id']} already exists, mapped to {pid}")
-        else:
-            data.add(profile["id"], entry, profile["id"], profile["name"])
-    
-    pid = data.query_profile_by_entry_uuid(entry, profile["id"])
-    profile["id"] = pid
-    if data.exists_name_except_profile(pid, profile["name"]):
-        suffix = f"_{entry}"
-        name = f"{profile['name'][:max(0, 16 - len(suffix))]}{suffix}"
-        while data.exists_name_except_profile(pid, name):
-            random_entry = "".join(random.choices(string.ascii_lowercase, k=len(entry)))
-            random_suffix = f"_{random_entry}"
-            name = f"{profile['name'][:max(0, 16 - len(random_suffix))]}{random_suffix}"
-        print(f"Playername {profile['name']} already exists, renaming to {name}")
-        profile["name"] = name
-    data.update_name_by_profile(pid, profile["name"])
-
-    response_body = json.dumps(profile).encode("utf-8")
-    hop_by_hop_headers = {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-        "content-length",
-    }
-
-    # print(f"Response headers: {winner_headers}")
-    # print(f"Response profile: {json.dumps(profile, ensure_ascii=False)}")
-    self.send_response(200)
-    for header_name, header_value in winner_headers.items():
-        if header_name.lower() in hop_by_hop_headers:
-            continue
-        if header_name.lower() == "content-type":
-            continue
-        self.send_header(header_name, header_value)
-    self.send_header("Content-Type", "application/json; charset=utf-8")
-    self.send_header("Content-Length", str(len(response_body)))
-    self.end_headers()
-    self.wfile.write(response_body)
+MAX_PROFILE_NAME_LENGTH = 16
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/hasJoined"):
             query_suffix = self.path[len("/hasJoined"):]
-            targets = {target_id: f"{api}{query_suffix}" for target_id, api in ENTRIES.items()}
+            targets = {entry_id: f"{entry['api']}{query_suffix}" for entry_id, entry in ENTRIES.items()}
             if not targets:
                 print("No targets found")
                 self.send_response(204)
@@ -77,29 +25,29 @@ class Handler(BaseHTTPRequestHandler):
             winner_data = None
             winner_headers = {}
 
-            def fetch_target(target_id, target_url):
+            def fetch_target(entry_id, target_url):
                 try:
                     with urlopen(target_url, timeout=3) as response:
-                        return target_id, response.getcode(), response.read(), dict(response.headers.items())
+                        return entry_id, response.getcode(), response.read(), dict(response.headers.items())
                 except HTTPError as e:
-                    return target_id, e.code, e.read(), dict(e.headers.items())
+                    return entry_id, e.code, e.read(), dict(e.headers.items())
                 except (URLError, TimeoutError):
-                    return target_id, None, b"", {}
+                    return entry_id, None, b"", {}
 
             with ThreadPoolExecutor(max_workers=len(targets)) as executor:
                 future_map = {
-                    executor.submit(fetch_target, target_id, target_url): target_id
-                    for target_id, target_url in targets.items()
+                    executor.submit(fetch_target, entry_id, target_url): entry_id
+                    for entry_id, target_url in targets.items()
                 }
                 try:
                     for future in as_completed(future_map, timeout=3):
-                        target_id, status_code, response_data, response_headers = future.result()
+                        entry_id, status_code, response_data, response_headers = future.result()
                         if status_code == 200:
                             try:
                                 parsed_data = json.loads(response_data.decode("utf-8"))
                             except (UnicodeDecodeError, json.JSONDecodeError):
                                 continue
-                            winner_id = target_id
+                            winner_id = entry_id
                             winner_data = parsed_data
                             winner_headers = response_headers
                             for other_future in future_map:
@@ -125,6 +73,96 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(405)
         self.end_headers()
         self.wfile.write(b'{"path": "/hasJoined"}')
+
+def format_entry_name(entry_id, name):
+    return ENTRIES[entry_id]["format"].format(name=name, entry_id=entry_id)
+
+def truncate_name_for_entry(entry_id, name):
+    while name and len(format_entry_name(entry_id, name)) > MAX_PROFILE_NAME_LENGTH:
+        name = name[:-1]
+    if len(format_entry_name(entry_id, name)) > MAX_PROFILE_NAME_LENGTH:
+        raise ValueError(f"Entry '{entry_id}' name format exceeds {MAX_PROFILE_NAME_LENGTH} characters")
+    return name
+
+def increment_name(name: str):
+    if not name:
+        return "a"
+
+    chars = list(name)
+    for index in range(len(chars) - 1, -1, -1):
+        char = chars[index]
+        lower_char = char.lower()
+        if lower_char not in string.ascii_lowercase:
+            continue
+        if lower_char == "z":
+            chars[index] = "A" if char.isupper() else "a"
+            continue
+        chars[index] = chr(ord(char) + 1)
+        return "".join(chars)
+
+    chars[-1] = "a"
+    return "".join(chars)
+
+def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
+    name = truncate_name_for_entry(entry_id, profile_name)
+    attempted_names = set()
+
+    while True:
+        candidate = format_entry_name(entry_id, name)
+        if candidate in attempted_names:
+            raise ValueError(f"No available player name for {profile_name}")
+        attempted_names.add(candidate)
+        if not data.exists_name_except_profile(pid, candidate):
+            return candidate
+        name = increment_name(name)
+
+def handleProfile(conn: Handler, entry_id, profile, winner_headers: dict[str, str]):
+    print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
+    data = ProfilesData("profiles.csv")
+    pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
+    if pid == None:
+        print(f"Profile {profile['name']} not found, adding new one")
+        if data.exists_uuid(profile["id"]):
+            pid = uuid.uuid4().hex
+            data.add(pid, entry_id, profile["id"], profile["name"])
+            print(f"UUID {profile['id']} already exists, mapped to {pid}")
+        else:
+            data.add(profile["id"], entry_id, profile["id"], profile["name"])
+    
+    pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
+    profile["id"] = pid
+    if data.exists_name_except_profile(pid, profile["name"]):
+        name = make_unique_entry_name(data, pid, entry_id, profile["name"])
+        print(f"Playername {profile['name']} already exists, renaming to {name}")
+        profile["name"] = name
+    data.update_name_by_profile(pid, profile["name"])
+
+    response_body = json.dumps(profile).encode("utf-8")
+    hop_by_hop_headers = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    }
+
+    # print(f"Response headers: {winner_headers}")
+    # print(f"Response profile: {json.dumps(profile, ensure_ascii=False)}")
+    conn.send_response(200)
+    for header_name, header_value in winner_headers.items():
+        if header_name.lower() in hop_by_hop_headers:
+            continue
+        if header_name.lower() == "content-type":
+            continue
+        conn.send_header(header_name, header_value)
+    conn.send_header("Content-Type", "application/json; charset=utf-8")
+    conn.send_header("Content-Length", str(len(response_body)))
+    conn.end_headers()
+    conn.wfile.write(response_body)
 
 if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", 2268), Handler)
