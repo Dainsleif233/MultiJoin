@@ -6,34 +6,34 @@ import string
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
-from libs.data import LightweightDataTable
+from libs.data import ProfilesData
 from entries import ENTRIES
 
 def handleProfile(self, entry, profile, winner_headers):
     print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry}")
-    data = LightweightDataTable("profiles.csv")
-    pid = data.query_by_bc(entry, profile["id"])
+    data = ProfilesData("profiles.csv")
+    pid = data.query_profile_by_entry_uuid(entry, profile["id"])
     if pid == None:
         print(f"Profile {profile['name']} not found, adding new one")
-        if data.exists_c(profile["id"]):
+        if data.exists_uuid(profile["id"]):
             pid = uuid.uuid4().hex
             data.add(pid, entry, profile["id"], profile["name"])
             print(f"UUID {profile['id']} already exists, mapped to {pid}")
         else:
             data.add(profile["id"], entry, profile["id"], profile["name"])
     
-    pid = data.query_by_bc(entry, profile["id"])
+    pid = data.query_profile_by_entry_uuid(entry, profile["id"])
     profile["id"] = pid
-    if data.exists_d(pid, profile["name"]):
+    if data.exists_name_except_profile(pid, profile["name"]):
         suffix = f"_{entry}"
         name = f"{profile['name'][:max(0, 16 - len(suffix))]}{suffix}"
-        while data.exists_d(pid, name):
+        while data.exists_name_except_profile(pid, name):
             random_entry = "".join(random.choices(string.ascii_lowercase, k=len(entry)))
             random_suffix = f"_{random_entry}"
             name = f"{profile['name'][:max(0, 16 - len(random_suffix))]}{random_suffix}"
         print(f"Playername {profile['name']} already exists, renaming to {name}")
         profile["name"] = name
-    data.update_d_by_a(pid, profile["name"])
+    data.update_name_by_profile(pid, profile["name"])
 
     response_body = json.dumps(profile).encode("utf-8")
     hop_by_hop_headers = {

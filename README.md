@@ -1,12 +1,12 @@
 ## How to Use ?
 
-Edit `entries.py` to set your entries.
+1. Edit `entries.py` to set your entries.
+2. Turn on the `online-mode` in your Velocity config.
 
 **Then**
 
 ```bash
 python main.py
-
 java -Dmojang.sessionserver=http://127.0.0.1:2268/hasJoined -jar velocity.jar
 ```
 
