@@ -27,6 +27,10 @@ Install [authlib-injector](https://github.com/yushijinhun/authlib-injector) on a
 
 Use [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins).
 
+**Or**
+
+Use [CustomSkinLoader](https://modrinth.com/mod/customskinloader) on Clients.
+
 ## Want to add offline players ?
 
 Theoretically not supported.
