@@ -25,7 +25,23 @@ class ProfilesData:
         self.profile_to_record = {}  # Profile -> (Entry, UUID, Name)
         self.entry_uuid_to_profile = {}  # (Entry, UUID) -> Profile
         self.uuid_counter = Counter()  # UUID -> 出现次数, 用于快速检查 UUID 是否已存在
+        self.name_to_profiles = {}  # Name -> set(Profile), 用于快速检查玩家名冲突
         self._load()
+
+    def _index_record(self, profile: str, entry: str, original_uuid: str, name: str):
+        """为一条记录建立所有查询索引。"""
+        self.entry_uuid_to_profile[(entry, original_uuid)] = profile
+        self.uuid_counter[original_uuid] += 1
+        self.name_to_profiles.setdefault(name, set()).add(profile)
+
+    def _remove_name_index(self, profile: str, name: str):
+        profiles = self.name_to_profiles.get(name)
+        if profiles is None:
+            return
+
+        profiles.discard(profile)
+        if not profiles:
+            del self.name_to_profiles[name]
 
     def _load(self):
         """从 CSV 文件加载数据, 构建内存索引。"""
@@ -50,8 +66,7 @@ class ProfilesData:
                     profile, entry, original_uuid, name = row
 
                 self.profile_to_record[profile] = (entry, original_uuid, name)
-                self.entry_uuid_to_profile[(entry, original_uuid)] = profile
-                self.uuid_counter[original_uuid] += 1
+                self._index_record(profile, entry, original_uuid, name)
 
     def _save(self):
         """将当前数据写回 CSV 文件, 按 Profile 排序保证可读性。"""
@@ -80,10 +95,7 @@ class ProfilesData:
         检查是否存在 Name 为 name 且 Profile 不等于 profile 的记录。
         :return: True/False
         """
-        for current_profile, (_, _, current_name) in self.profile_to_record.items():
-            if current_profile != profile and current_name == name:
-                return True
-        return False
+        return any(current_profile != profile for current_profile in self.name_to_profiles.get(name, ()))
 
     def add(self, profile: str, entry: str, original_uuid: str, name: str = ""):
         """
@@ -97,8 +109,7 @@ class ProfilesData:
             raise ValueError(f"(Entry, UUID) 组合 ('{entry}', '{original_uuid}') 已存在")
 
         self.profile_to_record[profile] = (entry, original_uuid, name)
-        self.entry_uuid_to_profile[(entry, original_uuid)] = profile
-        self.uuid_counter[original_uuid] += 1
+        self._index_record(profile, entry, original_uuid, name)
         self._save()
 
     def update_name_by_profile(self, profile: str, new_name: str):
@@ -110,5 +121,7 @@ class ProfilesData:
         if new_name == old_name:
             return
 
+        self._remove_name_index(profile, old_name)
         self.profile_to_record[profile] = (entry, original_uuid, new_name)
+        self.name_to_profiles.setdefault(new_name, set()).add(profile)
         self._save()
