@@ -1,4 +1,4 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import uuid
 import json
 import string
@@ -32,7 +32,7 @@ class Handler(BaseHTTPRequestHandler):
 
             def fetch_target(entry_id, target_url):
                 try:
-                    with urlopen(target_url, timeout=3) as response:
+                    with urlopen(target_url, timeout=5) as response:
                         return entry_id, response.getcode(), response.read(), dict(response.headers.items())
                 except HTTPError as e:
                     return entry_id, e.code, e.read(), dict(e.headers.items())
@@ -45,7 +45,7 @@ class Handler(BaseHTTPRequestHandler):
                     for entry_id, target_url in targets.items()
                 }
                 try:
-                    for future in as_completed(future_map, timeout=3):
+                    for future in as_completed(future_map, timeout=5):
                         entry_id, status_code, response_data, response_headers = future.result()
                         if status_code == 200:
                             try:
@@ -124,26 +124,27 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
 def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, str]):
     print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
     data = ProfilesData(PROFILES_PATH)
-    pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
-    if pid == None:
-        print(f"Profile {profile['name']} not found, adding new one")
-        if data.exists_uuid(profile["id"]):
-            pid = uuid.uuid4().hex
-            data.add(pid, entry_id, profile["id"], profile["name"])
-            print(f"UUID {profile['id']} already exists, mapped to {pid}")
-        else:
-            data.add(profile["id"], entry_id, profile["id"], profile["name"])
-    
-    pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
-    profile["id"] = pid
-    if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
-        name = make_unique_entry_name(data, pid, entry_id, profile["name"])
-        if ALWAYS_FORMAT:
-            print(f"Playername {profile['name']} formatted to {name}")
-        else:
-            print(f"Playername {profile['name']} already exists, renaming to {name}")
-        profile["name"] = name
-    data.update_name_by_profile(pid, profile["name"])
+    with data.latest():
+        pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
+        if pid == None:
+            print(f"Profile {profile['name']} not found, adding new one")
+            if data.exists_uuid(profile["id"]):
+                pid = uuid.uuid4().hex
+                data.add(pid, entry_id, profile["id"], profile["name"])
+                print(f"UUID {profile['id']} already exists, mapped to {pid}")
+            else:
+                data.add(profile["id"], entry_id, profile["id"], profile["name"])
+
+        pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
+        profile["id"] = pid
+        if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
+            name = make_unique_entry_name(data, pid, entry_id, profile["name"])
+            if ALWAYS_FORMAT:
+                print(f"Playername {profile['name']} formatted to {name}")
+            else:
+                print(f"Playername {profile['name']} already exists, renaming to {name}")
+            profile["name"] = name
+        data.update_name_by_profile(pid, profile["name"])
 
     response_body = json.dumps(profile).encode("utf-8")
     hop_by_hop_headers = {
@@ -173,6 +174,6 @@ def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, st
     conn.wfile.write(response_body)
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", 2268), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", 2268), Handler)
     print("Server running on port 2268")
     server.serve_forever()
