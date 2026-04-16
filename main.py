@@ -39,7 +39,9 @@ class Handler(BaseHTTPRequestHandler):
                 except (URLError, TimeoutError):
                     return entry_id, None, b"", {}
 
-            with ThreadPoolExecutor(max_workers=len(targets)) as executor:
+            executor = ThreadPoolExecutor(max_workers=len(targets))
+            future_map = {}
+            try:
                 future_map = {
                     executor.submit(fetch_target, entry_id, target_url): entry_id
                     for entry_id, target_url in targets.items()
@@ -61,6 +63,10 @@ class Handler(BaseHTTPRequestHandler):
                             break
                 except FuturesTimeoutError:
                     pass
+            finally:
+                for future in future_map:
+                    future.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
 
             if winner_id is not None:
                 # print(f"Winner headers: {winner_headers}")
@@ -122,6 +128,17 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
         name = increment_name(name)
 
 def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, str]):
+    multijoin_data = {
+        "entry": entry_id,
+        "name": profile["name"],
+        "uuid": profile["id"],
+    }
+    multijoin = {
+        "name": "multijoin",
+        "value": json.dumps(multijoin_data, ensure_ascii=False)
+    }
+    profile["properties"].append(multijoin)
+
     print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
     data = ProfilesData(PROFILES_PATH)
     with data.latest():
