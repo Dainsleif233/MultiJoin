@@ -147,16 +147,6 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
     original_name = profile["name"]
     original_uuid = profile["id"]
     actions = []
-    multijoin_data = {
-        "entry": entry_id,
-        "name": original_name,
-        "uuid": original_uuid,
-    }
-    multijoin = {
-        "name": "multijoin",
-        "value": json.dumps(multijoin_data, ensure_ascii=False)
-    }
-    profile["properties"].append(multijoin)
 
     data = ProfilesData(PROFILES_PATH)
     with data.latest():
@@ -181,6 +171,18 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
             profile["name"] = name
         data.update_name_by_profile(pid, profile["name"])
         log_profile_result(entry_id, original_name, original_uuid, pid, profile["name"], actions)
+
+    multijoin_data = {
+        "profile": pid,
+        "entry": entry_id,
+        "uuid": original_uuid,
+        "name": original_name
+    }
+    multijoin = {
+        "name": "multijoin",
+        "value": json.dumps(multijoin_data, ensure_ascii=False)
+    }
+    profile["properties"].append(multijoin)
 
     response_body = json.dumps(profile).encode("utf-8")
     hop_by_hop_headers = {
