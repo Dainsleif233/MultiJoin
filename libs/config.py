@@ -32,6 +32,22 @@ def load_always_format(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) 
     return always_format
 
 
+def load_key(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> str:
+    config = load_config(filepath)
+    key = config.get("key", "")
+    if not isinstance(key, str):
+        raise ValueError("Config 'key' must be a string")
+    return key
+
+
+def load_token_expires_in(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> int:
+    config = load_config(filepath)
+    token_expires_in = config.get("tokenExpiresIn", 600)
+    if isinstance(token_expires_in, bool) or not isinstance(token_expires_in, int) or token_expires_in <= 0:
+        raise ValueError("Config 'tokenExpiresIn' must be a positive integer")
+    return token_expires_in
+
+
 def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dict[str, Dict[str, str]]:
     config = load_config(filepath)
     entries = config.get("entries")

@@ -2,25 +2,36 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import uuid
 import json
 import string
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
-from libs.config import load_always_format, load_entries
+from libs.config import load_always_format, load_entries, load_key, load_token_expires_in
 from libs.data import ProfilesData
 
 MAX_PROFILE_NAME_LENGTH = 16
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 ALWAYS_FORMAT = load_always_format()
+KEY = load_key()
+TOKEN_EXPIRES_IN = load_token_expires_in()
 ENTRIES = load_entries()
+BIND_TOKENS = {}
+BIND_TOKENS_BY_PID = {}
+BIND_TOKENS_LOCK = threading.Lock()
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
     def do_GET(self):
-        if self.path.startswith("/hasJoined?"):
+        parsed_path = urlparse(self.path)
+        if parsed_path.path == "/bind":
+            handle_bind(self, parsed_path.query)
+        elif self.path.startswith("/hasJoined?"):
             query_suffix = self.path[len("/hasJoined"):]
             targets = {entry_id: f"{entry['api']}{query_suffix}" for entry_id, entry in ENTRIES.items()}
             if not targets:
@@ -88,6 +99,147 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'{"path": "/hasJoined"}')
 
+def send_text(conn: Handler, status_code: int, message: str = ""):
+    response_body = message.encode("utf-8")
+    conn.send_response(status_code)
+    conn.send_header("Content-Type", "text/plain; charset=utf-8")
+    conn.send_header("Content-Length", str(len(response_body)))
+    conn.end_headers()
+    if response_body:
+        conn.wfile.write(response_body)
+
+def require_one_param(params, name):
+    values = params.get(name)
+    if not values or values[0] == "":
+        return None
+    return values[0]
+
+def cleanup_expired_bind_tokens(now=None):
+    if now is None:
+        now = time.time()
+
+    expired_tokens = [
+        token
+        for token, token_data in BIND_TOKENS.items()
+        if token_data["expires_at"] <= now
+    ]
+    for token in expired_tokens:
+        token_data = BIND_TOKENS.pop(token, None)
+        if token_data is None:
+            continue
+        if BIND_TOKENS_BY_PID.get(token_data["pid"]) == token:
+            del BIND_TOKENS_BY_PID[token_data["pid"]]
+
+def create_bind_token(pid):
+    now = time.time()
+    token = uuid.uuid4().hex
+    with BIND_TOKENS_LOCK:
+        cleanup_expired_bind_tokens(now)
+        old_token = BIND_TOKENS_BY_PID.get(pid)
+        if old_token is not None:
+            BIND_TOKENS.pop(old_token, None)
+        BIND_TOKENS[token] = {
+            "pid": pid,
+            "expires_at": now + TOKEN_EXPIRES_IN,
+        }
+        BIND_TOKENS_BY_PID[pid] = token
+    return token
+
+def get_valid_bind_token_pid(token):
+    now = time.time()
+    with BIND_TOKENS_LOCK:
+        cleanup_expired_bind_tokens(now)
+        token_data = BIND_TOKENS.get(token)
+        if token_data is None:
+            return None
+        return token_data["pid"]
+
+def remove_bind_token(token):
+    with BIND_TOKENS_LOCK:
+        token_data = BIND_TOKENS.pop(token, None)
+        if token_data is None:
+            return
+        if BIND_TOKENS_BY_PID.get(token_data["pid"]) == token:
+            del BIND_TOKENS_BY_PID[token_data["pid"]]
+
+def handle_bind(conn: Handler, query: str):
+    params = parse_qs(query, keep_blank_values=True)
+    action = require_one_param(params, "action")
+    key = require_one_param(params, "key")
+    pid = require_one_param(params, "pid")
+
+    if action not in {"token", "bind", "unBind"}:
+        send_text(conn, 400, "invalid action")
+        return
+    if not KEY or key != KEY:
+        send_text(conn, 403, "invalid key")
+        return
+    if pid is None:
+        send_text(conn, 400, "missing pid")
+        return
+
+    data = ProfilesData(PROFILES_PATH)
+    try:
+        if action == "token":
+            handle_bind_token(conn, data, pid)
+        elif action == "bind":
+            token = require_one_param(params, "token")
+            if token is None:
+                send_text(conn, 400, "missing token")
+                return
+            handle_bind_apply(conn, data, pid, token)
+        else:
+            handle_bind_clear(conn, data, pid)
+    except KeyError:
+        send_text(conn, 404, "profile not found")
+
+def handle_bind_token(conn: Handler, data: ProfilesData, pid: str):
+    with data.latest():
+        if not data.exists_profile(pid):
+            send_text(conn, 404, "profile not found")
+            return
+        if not data.is_unbound_profile(pid):
+            send_text(conn, 409, "profile already bound")
+            return
+
+    token = create_bind_token(pid)
+    send_text(conn, 200, token)
+
+def handle_bind_apply(conn: Handler, data: ProfilesData, pid: str, token: str):
+    source_pid = get_valid_bind_token_pid(token)
+    if source_pid is None:
+        send_text(conn, 410, "token expired or not found")
+        return
+
+    with data.latest():
+        if not data.exists_profile(pid) or not data.exists_profile(source_pid):
+            send_text(conn, 404, "profile not found")
+            return
+        if pid == source_pid:
+            send_text(conn, 409, "cannot bind profile to itself")
+            return
+        if not data.is_unbound_profile(source_pid):
+            send_text(conn, 409, "profile already bound")
+            return
+
+        data.update_bind_by_profile(source_pid, pid)
+        remove_bind_token(token)
+
+    send_text(conn, 204)
+
+def handle_bind_clear(conn: Handler, data: ProfilesData, pid: str):
+    with data.latest():
+        if not data.exists_profile(pid):
+            send_text(conn, 404, "profile not found")
+            return
+        if data.is_unbound_profile(pid):
+            send_text(conn, 409, "profile is not bound")
+            return
+
+        data.clear_bind_by_profile(pid)
+
+    send_text(conn, 204)
+
 def format_entry_name(entry_id, name):
     return ENTRIES[entry_id]["format"].format(name=name, entry=entry_id)
 
@@ -147,6 +299,7 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
     original_name = profile["name"]
     original_uuid = profile["id"]
     actions = []
+    bind = ""
 
     data = ProfilesData(PROFILES_PATH)
     with data.latest():
@@ -170,13 +323,18 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
                 actions.append("renamed")
             profile["name"] = name
         data.update_name_by_profile(pid, profile["name"])
+        bind = data.get_bind_by_profile(pid)
+        if bind and data.exists_profile(bind):
+            profile["id"] = bind
+            actions.append("bound")
         log_profile_result(entry_id, original_name, original_uuid, pid, profile["name"], actions)
 
     multijoin_data = {
         "profile": pid,
         "entry": entry_id,
         "uuid": original_uuid,
-        "name": original_name
+        "name": original_name,
+        "bind": bind if profile["id"] == bind else ""
     }
     multijoin = {
         "name": "multijoin",

@@ -1,4 +1,6 @@
 alwaysFormat = false
+key = ""
+tokenExpiresIn = 600
 
 [[entries]]
 id = "union"
