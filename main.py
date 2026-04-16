@@ -127,7 +127,7 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
             return candidate
         name = increment_name(name)
 
-def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, str]):
+def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winner_headers: Dict[str, str]):
     multijoin_data = {
         "entry": entry_id,
         "name": profile["name"],
