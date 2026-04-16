@@ -16,12 +16,15 @@ ALWAYS_FORMAT = load_always_format()
 ENTRIES = load_entries()
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        return
+
     def do_GET(self):
         if self.path.startswith("/hasJoined?"):
             query_suffix = self.path[len("/hasJoined"):]
             targets = {entry_id: f"{entry['api']}{query_suffix}" for entry_id, entry in ENTRIES.items()}
             if not targets:
-                print("No targets found")
+                print("[WARN] No entries configured")
                 self.send_response(204)
                 self.end_headers()
                 return
@@ -73,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
                 # print(f"Winner data: {json.dumps(winner_data, ensure_ascii=False)}")
                 handleProfile(self, winner_id, winner_data, winner_headers)
             else:
-                print("No valid response from any target")
+                print(f"[MISS] No valid response: {self.path}")
                 self.send_response(204)
                 self.end_headers()
         else:
@@ -127,11 +130,27 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
             return candidate
         name = increment_name(name)
 
+def short_id(value):
+    if value is None:
+        return "-"
+    return f"{value[:8]}..."
+
+def log_profile_result(entry_id, original_name, original_uuid, profile_id, final_name, actions):
+    action_text = ",".join(actions) if actions else "existing"
+    rename_text = f" name={original_name}->{final_name}" if original_name != final_name else f" name={final_name}"
+    print(
+        f"[JOIN] entry={entry_id}{rename_text} "
+        f"uuid={short_id(original_uuid)} profile={short_id(profile_id)} actions={action_text}"
+    )
+
 def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winner_headers: Dict[str, str]):
+    original_name = profile["name"]
+    original_uuid = profile["id"]
+    actions = []
     multijoin_data = {
         "entry": entry_id,
-        "name": profile["name"],
-        "uuid": profile["id"],
+        "name": original_name,
+        "uuid": original_uuid,
     }
     multijoin = {
         "name": "multijoin",
@@ -139,29 +158,29 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
     }
     profile["properties"].append(multijoin)
 
-    print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
     data = ProfilesData(PROFILES_PATH)
     with data.latest():
-        pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
+        pid = data.query_profile_by_entry_uuid(entry_id, original_uuid)
         if pid == None:
-            print(f"Profile {profile['name']} not found, adding new one")
-            if data.exists_uuid(profile["id"]):
+            actions.append("new")
+            if data.exists_uuid(original_uuid):
                 pid = uuid.uuid4().hex
-                data.add(pid, entry_id, profile["id"], profile["name"])
-                print(f"UUID {profile['id']} already exists, mapped to {pid}")
+                data.add(pid, entry_id, original_uuid, original_name)
+                actions.append("mapped_uuid")
             else:
-                data.add(profile["id"], entry_id, profile["id"], profile["name"])
+                pid = original_uuid
+                data.add(pid, entry_id, original_uuid, original_name)
 
-        pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
         profile["id"] = pid
         if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
             name = make_unique_entry_name(data, pid, entry_id, profile["name"])
             if ALWAYS_FORMAT:
-                print(f"Playername {profile['name']} formatted to {name}")
+                actions.append("formatted")
             else:
-                print(f"Playername {profile['name']} already exists, renaming to {name}")
+                actions.append("renamed")
             profile["name"] = name
         data.update_name_by_profile(pid, profile["name"])
+        log_profile_result(entry_id, original_name, original_uuid, pid, profile["name"], actions)
 
     response_body = json.dumps(profile).encode("utf-8")
     hop_by_hop_headers = {
@@ -193,4 +212,9 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winne
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", 2268), Handler)
     print("Server running on port 2268")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped")
+    finally:
+        server.server_close()
