@@ -3,6 +3,7 @@ import uuid
 import json
 import string
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from pathlib import Path
 from typing import Dict
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -10,6 +11,7 @@ from libs.config import load_always_format, load_entries
 from libs.data import ProfilesData
 
 MAX_PROFILE_NAME_LENGTH = 16
+PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 ALWAYS_FORMAT = load_always_format()
 ENTRIES = load_entries()
 
@@ -121,7 +123,7 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
 
 def handleProfile(conn: Handler, entry_id, profile, winner_headers: Dict[str, str]):
     print(f"Player {profile['name']} ({profile['id']}) authentication successful, entry: {entry_id}")
-    data = ProfilesData("profiles.csv")
+    data = ProfilesData(PROFILES_PATH)
     pid = data.query_profile_by_entry_uuid(entry_id, profile["id"])
     if pid == None:
         print(f"Profile {profile['name']} not found, adding new one")
