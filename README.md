@@ -109,7 +109,7 @@ if (mjProperty != null) {
 
 可以尝试以下方案：
 
-- 在后端服务器安装 [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker)。
+- 在 Velocity 代理端安装 [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker)。
 - 让客户端安装 [No Chat Reports](https://modrinth.com/mod/no-chat-reports)。
 - 在所有后端服务器安装 [authlib-injector](https://github.com/yushijinhun/authlib-injector)，并配置任意可用的 Yggdrasil API。
 
@@ -117,7 +117,7 @@ if (mjProperty != null) {
 
 可以尝试以下方案：
 
-- 在后端服务器安装 [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins)。
+- 在 Velocity 代理端安装 [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins)。
 - 让客户端安装 [CustomSkinLoader](https://modrinth.com/mod/customskinloader)，并正确配置。
 
 ### 想接入离线玩家
@@ -154,7 +154,6 @@ format = "{name}_m"
 - 玩家是否真的通过其中一个入口完成了正版/Yggdrasil 登录。
 - `api` 地址是否正确，且能从 MultiJoin 所在机器访问。
 - 入口服务是否响应过慢。MultiJoin 单次请求等待时间约为 5 秒。
-- Velocity 启动参数是否指向了 `/hasJoined`。
 
 ### 配置读取失败
 

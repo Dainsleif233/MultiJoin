@@ -109,7 +109,7 @@ if (mjProperty != null) {
 
 Try these solutions:
 
-- Install [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker) on backend servers.
+- Install [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker) on Velocity.
 - Ask clients to install [No Chat Reports](https://modrinth.com/mod/no-chat-reports).
 - Install [authlib-injector](https://github.com/yushijinhun/authlib-injector) on all backend servers and configure any valid Yggdrasil API.
 
@@ -117,7 +117,7 @@ Try these solutions:
 
 Try these solutions:
 
-- Install [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins) on backend servers.
+- Install [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins) on Velocity.
 - Ask clients to install [CustomSkinLoader](https://modrinth.com/mod/customskinloader) and configure it correctly.
 
 ### Adding Offline Players
@@ -154,7 +154,6 @@ This means none of the entries returned a valid profile. Check:
 - Whether the player actually completed online/Yggdrasil login through one of the entries.
 - Whether the `api` address is correct and reachable from the machine running MultiJoin.
 - Whether the entry service is too slow. MultiJoin waits about 5 seconds for each request round.
-- Whether the Velocity startup argument points to `/hasJoined`.
 
 ### Configuration Loading Fails
 
