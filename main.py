@@ -170,12 +170,15 @@ def handle_bind(conn: Handler, query: str):
 
     if action not in {"token", "bind", "unBind"}:
         send_text(conn, 400, "invalid action")
+        log_bind_result(action, pid, 400, "invalid action", client=client_host(conn))
         return
     if not KEY or key != KEY:
         send_text(conn, 403, "invalid key")
+        log_bind_result(action, pid, 403, "invalid key", client=client_host(conn))
         return
     if pid is None:
         send_text(conn, 400, "missing pid")
+        log_bind_result(action, pid, 400, "missing pid", client=client_host(conn))
         return
 
     data = ProfilesData(PROFILES_PATH)
@@ -186,59 +189,124 @@ def handle_bind(conn: Handler, query: str):
             token = require_one_param(params, "token")
             if token is None:
                 send_text(conn, 400, "missing token")
+                log_bind_result(action, pid, 400, "missing token", client=client_host(conn))
                 return
             handle_bind_apply(conn, data, pid, token)
         else:
             handle_bind_clear(conn, data, pid)
     except KeyError:
         send_text(conn, 404, "profile not found")
+        log_bind_result(action, pid, 404, "profile not found", client=client_host(conn))
 
 def handle_bind_token(conn: Handler, data: ProfilesData, pid: str):
     with data.latest():
         if not data.exists_profile(pid):
             send_text(conn, 404, "profile not found")
+            log_bind_result("token", pid, 404, "profile not found", client=client_host(conn))
             return
         if not data.is_unbound_profile(pid):
             send_text(conn, 409, "profile already bound")
+            log_bind_result("token", pid, 409, "profile already bound", client=client_host(conn))
             return
 
     token = create_bind_token(pid)
     send_text(conn, 200, token)
+    log_bind_result(
+        "token",
+        pid,
+        200,
+        "created",
+        token=short_id(token),
+        expires_in=TOKEN_EXPIRES_IN,
+        client=client_host(conn),
+    )
 
 def handle_bind_apply(conn: Handler, data: ProfilesData, pid: str, token: str):
     source_pid = get_valid_bind_token_pid(token)
     if source_pid is None:
         send_text(conn, 410, "token expired or not found")
+        log_bind_result(
+            "bind",
+            pid,
+            410,
+            "token expired or not found",
+            token=short_id(token),
+            client=client_host(conn),
+        )
         return
 
     with data.latest():
         if not data.exists_profile(pid) or not data.exists_profile(source_pid):
             send_text(conn, 404, "profile not found")
+            log_bind_result(
+                "bind",
+                pid,
+                404,
+                "profile not found",
+                source=short_id(source_pid),
+                client=client_host(conn),
+            )
             return
         if pid == source_pid:
             send_text(conn, 409, "cannot bind profile to itself")
+            log_bind_result(
+                "bind",
+                pid,
+                409,
+                "cannot bind profile to itself",
+                source=short_id(source_pid),
+                client=client_host(conn),
+            )
             return
         if not data.is_unbound_profile(source_pid):
             send_text(conn, 409, "profile already bound")
+            log_bind_result(
+                "bind",
+                pid,
+                409,
+                "profile already bound",
+                source=short_id(source_pid),
+                client=client_host(conn),
+            )
             return
 
         data.update_bind_by_profile(source_pid, pid)
         remove_bind_token(token)
 
     send_text(conn, 204)
+    log_bind_result(
+        "bind",
+        source_pid,
+        204,
+        "bound",
+        target=short_id(pid),
+        token=short_id(token),
+        client=client_host(conn),
+    )
 
 def handle_bind_clear(conn: Handler, data: ProfilesData, pid: str):
     with data.latest():
         if not data.exists_profile(pid):
             send_text(conn, 404, "profile not found")
+            log_bind_result("unBind", pid, 404, "profile not found", client=client_host(conn))
             return
         if data.is_unbound_profile(pid):
             send_text(conn, 409, "profile is not bound")
+            log_bind_result("unBind", pid, 409, "profile is not bound", client=client_host(conn))
             return
 
+        old_bind = data.get_bind_by_profile(pid)
         data.clear_bind_by_profile(pid)
 
     send_text(conn, 204)
+    log_bind_result(
+        "unBind",
+        pid,
+        204,
+        "cleared",
+        target=short_id(old_bind),
+        client=client_host(conn),
+    )
 
 def format_entry_name(entry_id, name):
     return ENTRIES[entry_id]["format"].format(name=name, entry=entry_id)
@@ -286,6 +354,22 @@ def short_id(value):
     if value is None:
         return "-"
     return f"{value[:8]}..."
+
+def client_host(conn: Handler):
+    return conn.client_address[0] if conn.client_address else "-"
+
+def log_bind_result(action, pid, status_code, reason="", **details):
+    detail_text = " ".join(
+        f"{key}={value}"
+        for key, value in details.items()
+        if value not in (None, "")
+    )
+    reason_text = f" reason={reason}" if reason else ""
+    detail_text = f" {detail_text}" if detail_text else ""
+    print(
+        f"[BIND] action={action or '-'} status={status_code} "
+        f"profile={short_id(pid)}{reason_text}{detail_text}"
+    )
 
 def log_profile_result(entry_id, original_name, original_uuid, profile_id, final_name, actions):
     action_text = ",".join(actions) if actions else "existing"
