@@ -82,13 +82,34 @@ Velocity 配置中需要启用 `online-mode`。如果 MultiJoin 和 Velocity 不
 
 在 Velocity 代理端安装 [MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) 以使用绑定功能。请在 `config.toml` 中设置强 `key`，并确保只有可信插件或服务可以访问 MultiJoin。
 
+## API
+
+MultiJoin 提供了一个在游戏内查询玩家原始 profile 的 API。
+
+```java
+GameProfile.Property mjProperty = player.getGameProfileProperties().stream().filter(p -> p.getName().equals("multijoin")).findFirst().orElse(null);
+if (mjProperty != null) {
+    JsonObject mjData = JsonParser.parseString(mjProperty.getValue()).getAsJsonObject();
+}
+```
+
+`mjData` 包含当前登入玩家在 MultiJoin 中的条目的数据。包含以下字段：
+
+- profile
+- entry
+- uuid
+- name
+- bind
+
+[MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) 就是一个示例。
+
 ## 常见情况与解决方法
 
 ### 玩家被踢出或聊天会话校验失败
 
 可以尝试以下方案：
 
-- 在后端服务器安装 [ChatSessionBlocker](https://github.com/Dainsleif233/ChatSessionBlocker)。
+- 在后端服务器安装 [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker)。
 - 让客户端安装 [No Chat Reports](https://modrinth.com/mod/no-chat-reports)。
 - 在所有后端服务器安装 [authlib-injector](https://github.com/yushijinhun/authlib-injector)，并配置任意可用的 Yggdrasil API。
 
@@ -104,6 +125,13 @@ Velocity 配置中需要启用 `online-mode`。如果 MultiJoin 和 Velocity 不
 MultiJoin 本身面向 Yggdrasil `hasJoined` 流程，理论上不直接支持普通离线玩家。可行替代方案是部署一个允许玩家自行注册的独立皮肤站，例如 [Blessing Skin Server](https://github.com/bs-community/blessing-skin-server)，再将它作为一个 Yggdrasil 入口加入 `config.toml`。
 
 可以使用 [skin-docker](https://github.com/Dainsleif233/skin-docker) 快速部署相关服务。
+
+或者使用公共的 Yggdrasil 服务，例如：
+
+- [LittleSkin](https://littleskin.cn/): `https://littleskin.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [红石皮肤站](https://mcskin.cn/): `https://mcskin.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [MUA 用户中心](https://skin.mualliance.ltd/): `https://skin.mualliance.ltd/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [Ely.by](https://ely.by/): `https://account.ely.by/api/authlib-injector/sessionserver/session/minecraft/hasJoined`
 
 ### 多入口玩家名重复
 
