@@ -2,7 +2,7 @@
 
 MultiJoin 是一个面向 Minecraft Velocity 代理端的轻量级 `hasJoined` 聚合服务，用于在同一个入口接入多个 Yggdrasil 登录源，并尽量保持玩家身份稳定。
 
-[English](README-en.md)
+[English](README.en.md)
 
 ## 功能概览
 

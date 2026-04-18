@@ -82,13 +82,34 @@ The binding feature maps one MultiJoin profile to another existing profile. A co
 
 Install [MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) on the Velocity proxy to use the binding feature. Set a strong `key` in `config.toml` and make sure only trusted plugins or services can access MultiJoin.
 
+## API
+
+MultiJoin provides an API for querying a player's original profile in game.
+
+```java
+GameProfile.Property mjProperty = player.getGameProfileProperties().stream().filter(p -> p.getName().equals("multijoin")).findFirst().orElse(null);
+if (mjProperty != null) {
+    JsonObject mjData = JsonParser.parseString(mjProperty.getValue()).getAsJsonObject();
+}
+```
+
+`mjData` contains the current logged-in player's entry data in MultiJoin. It contains these fields:
+
+- profile
+- entry
+- uuid
+- name
+- bind
+
+[MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) is an example.
+
 ## Common Cases And Solutions
 
 ### Players Get Kicked Or Chat Session Validation Fails
 
 Try these solutions:
 
-- Install [ChatSessionBlocker](https://github.com/Dainsleif233/ChatSessionBlocker) on backend servers.
+- Install [ChatSessionBlocker](https://modrinth.com/plugin/chatsessionblocker) on backend servers.
 - Ask clients to install [No Chat Reports](https://modrinth.com/mod/no-chat-reports).
 - Install [authlib-injector](https://github.com/yushijinhun/authlib-injector) on all backend servers and configure any valid Yggdrasil API.
 
@@ -104,6 +125,13 @@ Try these solutions:
 MultiJoin itself is designed for the Yggdrasil `hasJoined` flow and theoretically does not directly support normal offline players. A workable alternative is to deploy an independent skin server that allows players to register themselves, such as [Blessing Skin Server](https://github.com/bs-community/blessing-skin-server), and then add it to `config.toml` as a Yggdrasil entry.
 
 You can use [skin-docker](https://github.com/Dainsleif233/skin-docker) to quickly deploy the related services.
+
+Or use a public Yggdrasil service, for example:
+
+- [LittleSkin](https://littleskin.cn/): `https://littleskin.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [RedstoneSkin](https://mcskin.cn/): `https://mcskin.cn/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [MUA User Center](https://skin.mualliance.ltd/): `https://skin.mualliance.ltd/api/yggdrasil/sessionserver/session/minecraft/hasJoined`
+- [Ely.by](https://ely.by/): `https://account.ely.by/api/authlib-injector/sessionserver/session/minecraft/hasJoined`
 
 ### Duplicate Player Names Across Entries
 
