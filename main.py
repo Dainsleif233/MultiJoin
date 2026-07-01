@@ -1,5 +1,4 @@
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-import sys
 import uuid
 import json
 import string
@@ -8,18 +7,32 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict, Union
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+
+import httpx
 from libs.config import load_always_format, load_entries, load_key, load_token_expires_in
 from libs.data import ProfilesData
 
 MAX_PROFILE_NAME_LENGTH = 16
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
+PROFILES = ProfilesData(PROFILES_PATH)
 ALWAYS_FORMAT = load_always_format()
 KEY = load_key()
 TOKEN_EXPIRES_IN = load_token_expires_in()
 ENTRIES = load_entries()
+
+# 常驻 fan-out 线程池, 避免每个 hasJoined 请求 new/shutdown 一个 executor。
+# 池大小按 entry 数放大, 支撑多请求并发 fan-out。
+FETCH_WORKERS = max(len(ENTRIES) * 16, 32)
+FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefix="multijoin-fetch")
+# 每个 entry 一个 httpx.Client, keep-alive 复用 TCP/TLS 连接并缓存 DNS。
+# httpx.Client 线程安全, 可被多个 fan-out 线程共享。
+FETCH_TIMEOUT = httpx.Timeout(5.0)
+FETCH_LIMITS = httpx.Limits(max_connections=16, max_keepalive_connections=8)
+ENTRY_CLIENTS = {
+    entry_id: httpx.Client(timeout=FETCH_TIMEOUT, limits=FETCH_LIMITS, follow_redirects=True)
+    for entry_id in ENTRIES
+}
 BIND_TOKENS = {}
 BIND_TOKENS_BY_PID = {}
 BIND_TOKENS_LOCK = threading.Lock()
@@ -46,42 +59,37 @@ class Handler(BaseHTTPRequestHandler):
             winner_headers = {}
 
             def fetch_target(entry_id, target_url):
+                client = ENTRY_CLIENTS[entry_id]
                 try:
-                    with urlopen(target_url, timeout=5) as response:
-                        return entry_id, response.getcode(), response.read(), dict(response.headers.items())
-                except HTTPError as e:
-                    return entry_id, e.code, e.read(), dict(e.headers.items())
-                except (URLError, TimeoutError):
+                    response = client.get(target_url)
+                    return entry_id, response.status_code, response.content, dict(response.headers)
+                except httpx.RequestError:
                     return entry_id, None, b"", {}
 
-            executor = ThreadPoolExecutor(max_workers=len(targets))
-            future_map = {}
+            future_map = {
+                FETCH_EXECUTOR.submit(fetch_target, entry_id, target_url): entry_id
+                for entry_id, target_url in targets.items()
+            }
             try:
-                future_map = {
-                    executor.submit(fetch_target, entry_id, target_url): entry_id
-                    for entry_id, target_url in targets.items()
-                }
-                try:
-                    for future in as_completed(future_map, timeout=5):
-                        entry_id, status_code, response_data, response_headers = future.result()
-                        if status_code == 200:
-                            try:
-                                parsed_data = json.loads(response_data.decode("utf-8"))
-                            except (UnicodeDecodeError, json.JSONDecodeError):
-                                continue
-                            winner_id = entry_id
-                            winner_data = parsed_data
-                            winner_headers = response_headers
-                            for other_future in future_map:
-                                if other_future is not future:
-                                    other_future.cancel()
-                            break
-                except FuturesTimeoutError:
-                    pass
+                for future in as_completed(future_map, timeout=5):
+                    entry_id, status_code, response_data, response_headers = future.result()
+                    if status_code == 200:
+                        try:
+                            parsed_data = json.loads(response_data.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        winner_id = entry_id
+                        winner_data = parsed_data
+                        winner_headers = response_headers
+                        for other_future in future_map:
+                            if other_future is not future:
+                                other_future.cancel()
+                        break
+            except FuturesTimeoutError:
+                pass
             finally:
                 for future in future_map:
                     future.cancel()
-                executor.shutdown(wait=False, cancel_futures=sys.version_info >= (3, 9))
 
             if winner_id is not None:
                 # print(f"Winner headers: {winner_headers}")
@@ -182,7 +190,7 @@ def handle_bind(conn: Handler, query: str):
         log_bind_result(action, pid, 400, "missing pid", client=client_host(conn))
         return
 
-    data = ProfilesData(PROFILES_PATH)
+    data = PROFILES
     try:
         if action == "token":
             handle_bind_token(conn, data, pid)
@@ -386,28 +394,37 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
     actions = []
     bind = ""
 
-    data = ProfilesData(PROFILES_PATH)
+    data = PROFILES
     with data.latest():
         pid = data.query_profile_by_entry_uuid(entry_id, original_uuid)
         if pid == None:
             actions.append("new")
+            # 先算出最终 name, 再一次性入库, 避免先 add 原始名再 update 的两次写盘。
+            if ALWAYS_FORMAT or data.exists_name(profile["name"]):
+                name = make_unique_entry_name(data, pid, entry_id, profile["name"])
+                if ALWAYS_FORMAT:
+                    actions.append("formatted")
+                else:
+                    actions.append("renamed")
+                profile["name"] = name
             if data.exists_uuid(original_uuid):
                 pid = uuid.uuid4().hex
-                data.add(pid, entry_id, original_uuid, original_name)
+                data.add_with_name(pid, entry_id, original_uuid, profile["name"])
                 actions.append("mapped_uuid")
             else:
                 pid = original_uuid
-                data.add(pid, entry_id, original_uuid, original_name)
+                data.add_with_name(pid, entry_id, original_uuid, profile["name"])
+        else:
+            if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
+                name = make_unique_entry_name(data, pid, entry_id, profile["name"])
+                if ALWAYS_FORMAT:
+                    actions.append("formatted")
+                else:
+                    actions.append("renamed")
+                profile["name"] = name
+            data.update_name_by_profile(pid, profile["name"])
 
         profile["id"] = pid
-        if ALWAYS_FORMAT or data.exists_name_except_profile(pid, profile["name"]):
-            name = make_unique_entry_name(data, pid, entry_id, profile["name"])
-            if ALWAYS_FORMAT:
-                actions.append("formatted")
-            else:
-                actions.append("renamed")
-            profile["name"] = name
-        data.update_name_by_profile(pid, profile["name"])
         bind = data.get_bind_by_profile(pid)
         if bind and data.exists_profile(bind):
             profile["id"] = bind
@@ -463,3 +480,6 @@ if __name__ == "__main__":
         print("\nServer stopped")
     finally:
         server.server_close()
+        FETCH_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        for client in ENTRY_CLIENTS.values():
+            client.close()
