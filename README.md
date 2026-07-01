@@ -117,7 +117,7 @@ if (mjProperty != null) {
 
 可以尝试以下方案：
 
-- 在 Velocity 代理端安装 [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins)。
+- 在 Velocity 代理端安装 [JustEnoughSkins](https://modrinth.com/plugin/justenoughskins)。
 - 让客户端安装 [CustomSkinLoader](https://modrinth.com/mod/customskinloader)，并正确配置。
 
 ### 想接入离线玩家

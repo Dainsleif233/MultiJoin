@@ -117,7 +117,7 @@ Try these solutions:
 
 Try these solutions:
 
-- Install [JustEnoughSkins](https://github.com/Dainsleif233/JustEnoughSkins) on Velocity.
+- Install [JustEnoughSkins](https://modrinth.com/plugin/justenoughskins) on Velocity.
 - Ask clients to install [CustomSkinLoader](https://modrinth.com/mod/customskinloader) and configure it correctly.
 
 ### Adding Offline Players

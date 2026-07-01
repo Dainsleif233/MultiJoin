@@ -1,4 +1,5 @@
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import sys
 import uuid
 import json
 import string
@@ -6,7 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Union
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
@@ -80,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 for future in future_map:
                     future.cancel()
-                executor.shutdown(wait=False, cancel_futures=True)
+                executor.shutdown(wait=False, cancel_futures=sys.version_info >= (3, 9))
 
             if winner_id is not None:
                 # print(f"Winner headers: {winner_headers}")
@@ -379,7 +380,7 @@ def log_profile_result(entry_id, original_name, original_uuid, profile_id, final
         f"uuid={short_id(original_uuid)} profile={short_id(profile_id)} actions={action_text}"
     )
 
-def handleProfile(conn: Handler, entry_id, profile: Dict[str, str | list], winner_headers: Dict[str, str]):
+def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]], winner_headers: Dict[str, str]):
     original_name = profile["name"]
     original_uuid = profile["id"]
     actions = []

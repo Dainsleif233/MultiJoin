@@ -1,5 +1,6 @@
 import csv
 import os
+import sys
 import tempfile
 import threading
 from collections import Counter
@@ -125,6 +126,15 @@ class ProfilesData:
             os.fsync(f.fileno())
         try:
             os.replace(temp_path, self.filepath)
+        except OSError:
+            print(
+                f"[DATA] Failed to persist profiles to {self.filepath}, "
+                f"data saved to temporary file {temp_path}. "
+                f"Error: {sys.exc_info()[1]}",
+            )
+            raise
+        else:
+            temp_path = None
         finally:
             if temp_path is not None and temp_path.exists():
                 temp_path.unlink()
