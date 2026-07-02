@@ -10,6 +10,7 @@ except ModuleNotFoundError:
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
+MAX_PROFILE_NAME_LENGTH = 16
 
 
 def load_config(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> dict:
@@ -87,6 +88,15 @@ def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dic
         has_name_placeholder = "name" in field_names
         if not has_name_placeholder:
             raise ValueError(f"Entry '{entry_id}' format must contain '{{name}}'")
+
+        # 校验 format 能否生成合法长度的 Minecraft 玩家名 (≤16 字符)
+        shortest_formatted = name_format.format(name="a", entry=entry_id)
+        if len(shortest_formatted) > MAX_PROFILE_NAME_LENGTH:
+            raise ValueError(
+                f"Entry '{entry_id}' format '{name_format}' produces "
+                f"'{shortest_formatted}' ({len(shortest_formatted)} chars) even with a "
+                f"single-char name, exceeding the {MAX_PROFILE_NAME_LENGTH}-char limit"
+            )
 
         result[entry_id] = {
             "api": api,

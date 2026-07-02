@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 profiles.csv
+profiles.wal
 config.toml
 CLAUDE.md
 .claude/

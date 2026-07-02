@@ -11,10 +11,8 @@ from typing import Dict, Union
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from libs.config import load_always_format, load_entries, load_key, load_token_expires_in
+from libs.config import load_always_format, load_entries, load_key, load_token_expires_in, MAX_PROFILE_NAME_LENGTH
 from libs.data import ProfilesData
-
-MAX_PROFILE_NAME_LENGTH = 16
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 PROFILES = ProfilesData(PROFILES_PATH)
 ALWAYS_FORMAT = load_always_format()
@@ -344,7 +342,8 @@ def increment_name(name: str):
         chars[index] = chr(ord(char) + 1)
         return "".join(chars)
 
-    chars[-1] = "a"
+    # 全部字符都进位, 扩展一位。但需保证扩展后格式化结果不超限。
+    chars.append("a")
     return "".join(chars)
 
 def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
@@ -359,6 +358,8 @@ def make_unique_entry_name(data: ProfilesData, pid, entry_id, profile_name):
         if not data.exists_name_except_profile(pid, candidate):
             return candidate
         name = increment_name(name)
+        # 递增后可能超出最大长度, 截断回安全范围
+        name = truncate_name_for_entry(entry_id, name)
 
 def short_id(value):
     if value is None:
