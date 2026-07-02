@@ -80,7 +80,7 @@ Velocity 配置中需要启用 `online-mode`。如果 MultiJoin 和 Velocity 不
 
 绑定功能用于把一个 MultiJoin profile 指向另一个已存在 profile。典型用途是让同一个玩家从不同入口登录时，在后端服务器表现为同一个 UUID。
 
-在 Velocity 代理端安装 [MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) 以使用绑定功能。请在 `config.toml` 中设置强 `key`，并确保只有可信插件或服务可以访问 MultiJoin。
+在 Velocity 代理端安装 [MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) 以使用绑定功能。请在 `config.toml` 中设置强 `key`，并确保只有可信插件或服务可以访问 MultiJoin。
 
 ## API
 
@@ -101,7 +101,7 @@ if (mjProperty != null) {
 - name
 - bind
 
-[MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) 就是一个示例。
+[MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) 就是一个示例。
 
 ## 常见情况与解决方法
 

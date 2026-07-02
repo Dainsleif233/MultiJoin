@@ -80,7 +80,7 @@ Velocity must run with `online-mode` enabled. If MultiJoin and Velocity are not 
 
 The binding feature maps one MultiJoin profile to another existing profile. A common use case is making the same player appear as the same UUID on backend servers when they log in through different entries.
 
-Install [MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) on the Velocity proxy to use the binding feature. Set a strong `key` in `config.toml` and make sure only trusted plugins or services can access MultiJoin.
+Install [MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) on the Velocity proxy to use the binding feature. Set a strong `key` in `config.toml` and make sure only trusted plugins or services can access MultiJoin.
 
 ## API
 
@@ -101,7 +101,7 @@ if (mjProperty != null) {
 - name
 - bind
 
-[MultiJoinPlugin](https://github.com/Dainsleif233/MultiJoinPlugin) is an example.
+[MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) is an example.
 
 ## Common Cases And Solutions
 
