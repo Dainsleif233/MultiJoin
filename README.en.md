@@ -167,6 +167,7 @@ Check:
 
 ## Notes
 
+- **Do not manually edit `profiles.csv` while the service is running.** MultiJoin uses a WAL (write-ahead log) mechanism; the next checkpoint will overwrite external changes with in-memory data, causing your edits to be lost. To bulk-edit data, **stop the service, edit the CSV, delete `profiles.wal` in the same directory, then restart**. For normal operations, use the bind API.
 - `profiles.csv` is runtime data and should be backed up regularly.
 - Do not expose MultiJoin directly to the public internet. At minimum, use a firewall so only Velocity can access it.
 - The binding feature depends on `key`. Set a strong secret and avoid leaking it.

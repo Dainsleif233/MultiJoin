@@ -1,4 +1,5 @@
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import sys
 import uuid
 import json
 import string
@@ -429,7 +430,8 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
         if bind and data.exists_profile(bind):
             profile["id"] = bind
             actions.append("bound")
-        log_profile_result(entry_id, original_name, original_uuid, pid, profile["name"], actions)
+
+    log_profile_result(entry_id, original_name, original_uuid, pid, profile["name"], actions)
 
     multijoin_data = {
         "profile": pid,
@@ -480,6 +482,10 @@ if __name__ == "__main__":
         print("\nServer stopped")
     finally:
         server.server_close()
-        FETCH_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        PROFILES.close()
+        if sys.version_info >= (3, 9):
+            FETCH_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        else:
+            FETCH_EXECUTOR.shutdown(wait=False)
         for client in ENTRY_CLIENTS.values():
             client.close()

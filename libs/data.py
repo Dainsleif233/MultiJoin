@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import sys
 import tempfile
@@ -30,6 +31,7 @@ class ProfilesData:
         :param filepath: CSV 文件路径
         """
         self.filepath = Path(filepath)
+        self.wal_path = self.filepath.with_suffix(".wal")
         self._lock = self._get_lock(self.filepath)
         self.profile_to_record = {}  # Profile -> (Entry, UUID, Name, Bind)
         self.entry_uuid_to_profile = {}  # (Entry, UUID) -> Profile
@@ -38,7 +40,16 @@ class ProfilesData:
         self.bound_profiles = set()  # set(Profile), 用于快速检查 Profile 是否已有 Bind
         self._latest_depth = 0
         self._loaded_sig = None  # (mtime_ns, size), 上次加载时的文件签名, 用于惰性重载
+        # WAL: 写操作先追加到此文件 (append + fsync), 后台线程定时 checkpoint 合并回 CSV。
+        self._dirty = False  # 是否有未 checkpoint 的 WAL 操作, 内存比 CSV 新
+        self._dirty_count = 0  # 自上次 checkpoint 以来的脏操作数, 触发阈值则提前 checkpoint
+        self._flush_interval = 5.0  # 后台 checkpoint 周期 (秒)
+        self._flush_threshold = 256  # 脏操作阈值, 达到则后台线程立即 checkpoint
+        self._stopping = threading.Event()
+        self._flush_thread = None
+        self._wal_fp = None  # 复用的 WAL 追加句柄, 延迟到 _open_wal_unlocked 打开
         self._load()
+        self._start_flush_thread()
 
     @classmethod
     def _get_lock(cls, filepath: Path):
@@ -65,6 +76,26 @@ class ProfilesData:
         if bind:
             self.bound_profiles.add(profile)
 
+    def _set_record_unlocked(self, profile: str, entry: str, original_uuid: str, name: str, bind: str):
+        """
+        直接以最终值覆盖一条记录的全部字段并维护索引, 不做任何约束检查。
+        - 正常写路径: 先检查约束, 再调本方法落内存 + 追加 WAL。
+        - WAL 重放路径: 直接调本方法, 跳过约束 (崩溃恢复时数据已通过校验)。
+        幂等: 对同一 profile 重复设置最终值, 结果一致。
+        """
+        old = self.profile_to_record.get(profile)
+        if old is not None:
+            old_entry, old_uuid, old_name, old_bind = old
+            # 完全拆除旧记录的所有索引, 再统一重建新索引, 保证计数不漂移。
+            if self.entry_uuid_to_profile.get((old_entry, old_uuid)) == profile:
+                del self.entry_uuid_to_profile[(old_entry, old_uuid)]
+            self.uuid_counter[old_uuid] -= 1
+            self._remove_name_index(profile, old_name)
+            if old_bind:
+                self.bound_profiles.discard(profile)
+        self.profile_to_record[profile] = (entry, original_uuid, name, bind)
+        self._index_record(profile, entry, original_uuid, name, bind)
+
     def _remove_name_index(self, profile: str, name: str):
         profiles = self.name_to_profiles.get(name)
         if profiles is None:
@@ -83,35 +114,35 @@ class ProfilesData:
         return (st.st_mtime_ns, st.st_size)
 
     def _load_unlocked(self):
-        """从 CSV 文件加载数据, 构建内存索引。"""
+        """从 CSV 文件加载数据, 构建内存索引, 然后重放 WAL 并 checkpoint 固化。"""
         self._clear_indexes()
         sig = self._file_sig_unlocked()
-        if sig is None:
-            self._loaded_sig = None
-            return
-
-        with open(self.filepath, "r", newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            try:
-                header = next(reader)
-            except StopIteration:
-                self._loaded_sig = sig
-                return
-            if header != self.HEADER:
-                raise ValueError(f"Profiles CSV header must be: {', '.join(self.HEADER)}")
-
-            for line_number, row in enumerate(reader, start=2):
-                if len(row) != len(self.HEADER):
-                    raise ValueError(f"Profiles CSV line {line_number} must contain {len(self.HEADER)} columns")
-
-                profile, entry, original_uuid, name, bind = row
-
-                self.profile_to_record[profile] = (entry, original_uuid, name, bind)
-                self._index_record(profile, entry, original_uuid, name, bind)
+        if sig is not None:
+            with open(self.filepath, "r", newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                try:
+                    header = next(reader)
+                except StopIteration:
+                    header = None
+                if header is not None:
+                    if header != self.HEADER:
+                        raise ValueError(f"Profiles CSV header must be: {', '.join(self.HEADER)}")
+                    for line_number, row in enumerate(reader, start=2):
+                        if len(row) != len(self.HEADER):
+                            raise ValueError(f"Profiles CSV line {line_number} must contain {len(self.HEADER)} columns")
+                        profile, entry, original_uuid, name, bind = row
+                        self.profile_to_record[profile] = (entry, original_uuid, name, bind)
+                        self._index_record(profile, entry, original_uuid, name, bind)
         self._loaded_sig = sig
+        # 无论 CSV 是否存在, 都要重放 WAL (崩溃时可能只有 WAL), 然后立即 checkpoint 固化。
+        self._replay_wal_unlocked()
+        self._checkpoint_unlocked()
 
     def _maybe_reload_unlocked(self):
         """若文件签名变化则重载, 否则跳过。用于惰性重载, 避免每次查询全量读盘。"""
+        if self._dirty:
+            # 有未 checkpoint 的 WAL 操作时, 内存是权威源, 不能从磁盘重载 (会丢 WAL)。
+            return
         sig = self._file_sig_unlocked()
         if sig == self._loaded_sig:
             return
@@ -152,8 +183,8 @@ class ProfilesData:
                 f"data saved to temporary file {temp_path}. "
                 f"Error: {sys.exc_info()[1]}",
             )
-            # 写盘失败, 从磁盘重载以回滚已修改的内存索引, 避免内存-磁盘永久偏离。
-            self._load_unlocked()
+            # 不回滚内存: WAL 模式下内存是权威源, 回滚会丢失已确认的 WAL 写。
+            # 保留 dirty, 下次 checkpoint 重试; CSV 落后但完整。
             raise
         else:
             temp_path = None
@@ -162,6 +193,120 @@ class ProfilesData:
         finally:
             if temp_path is not None and temp_path.exists():
                 temp_path.unlink()
+
+    def _open_wal_unlocked(self):
+        """打开 (或复用) WAL 追加句柄。调用方持锁。"""
+        if self._wal_fp is not None and not self._wal_fp.closed:
+            return self._wal_fp
+        # "a" 模式: 文件不存在则创建, 写入追加到末尾, 不截断。
+        self._wal_fp = open(self.wal_path, "a", encoding="utf-8")
+        return self._wal_fp
+
+    def _append_wal_unlocked(self, record: dict):
+        """追加一条操作记录到 WAL 并 fsync, 保证崩溃不丢已确认的写。调用方持锁。"""
+        fp = self._open_wal_unlocked()
+        fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        fp.flush()
+        os.fsync(fp.fileno())
+        self._dirty = True
+        self._dirty_count += 1
+        # 脏操作累积到阈值则立即 checkpoint, 防止 WAL 无限增长 (同步, 在锁内)。
+        if self._dirty_count >= self._flush_threshold:
+            self._checkpoint_unlocked()
+
+    def _replay_wal_unlocked(self):
+        """启动恢复: 顺序重放 WAL 到内存索引, 跳过约束检查。调用方持锁。"""
+        try:
+            f = open(self.wal_path, "r", encoding="utf-8")
+        except FileNotFoundError:
+            return
+        with f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    # 崩溃时可能写入半行, 跳过 (该写未向客户端确认成功)。
+                    continue
+                op = record.get("op")
+                if op == "add":
+                    self._set_record_unlocked(
+                        record["profile"], record["entry"], record["uuid"],
+                        record["name"], "",
+                    )
+                elif op == "update_name":
+                    self._set_record_unlocked(
+                        record["profile"], record["entry"], record["uuid"],
+                        record["name"], record["bind"],
+                    )
+                elif op == "update_bind":
+                    self._set_record_unlocked(
+                        record["profile"], record["entry"], record["uuid"],
+                        record["name"], record["bind"],
+                    )
+        # 重放已并入内存, 由紧跟的 checkpoint 固化回 CSV 并清空 WAL。
+        self._dirty = True
+
+    def _truncate_wal_unlocked(self):
+        """清空 WAL (checkpoint 成功后调用)。调用方持锁。"""
+        fp = self._open_wal_unlocked()
+        fp.seek(0)
+        fp.truncate(0)
+        fp.flush()
+        os.fsync(fp.fileno())
+
+    def _checkpoint_unlocked(self):
+        """
+        把内存全量快照写回 CSV, 成功后清空 WAL。调用方持锁。
+        顺序: 写 CSV 临时文件 -> fsync -> os.replace -> 更新签名 -> 清空 WAL。
+        清空 WAL 必须在 CSV 落盘成功之后, 保证崩溃时 WAL 重放总能得到正确状态。
+        """
+        if not self._dirty:
+            return
+        try:
+            self._save_unlocked()
+        except OSError:
+            # CSV 落盘失败: 保留 dirty 与 WAL, 下次重试。内存仍是权威源。
+            return
+        self._truncate_wal_unlocked()
+        self._dirty = False
+        self._dirty_count = 0
+
+    def _flush_loop(self):
+        """后台线程: 周期性 checkpoint, 退出前最后落盘一次。"""
+        while True:
+            if self._stopping.wait(self._flush_interval):
+                break
+            try:
+                with self._lock:
+                    self._checkpoint_unlocked()
+            except Exception as e:  # noqa: BLE001 - 后台线程不能因单次失败退出
+                print(f"[DATA] background checkpoint failed: {e}")
+        # 退出前最后落盘
+        try:
+            with self._lock:
+                self._checkpoint_unlocked()
+        except Exception as e:  # noqa: BLE001
+            print(f"[DATA] final checkpoint failed: {e}")
+
+    def _start_flush_thread(self):
+        self._flush_thread = threading.Thread(
+            target=self._flush_loop, name="profiles-checkpoint", daemon=True,
+        )
+        self._flush_thread.start()
+
+    def close(self):
+        """优雅关闭: 停后台线程并做最后一次 checkpoint, 然后关闭 WAL 句柄。"""
+        self._stopping.set()
+        if self._flush_thread is not None:
+            self._flush_thread.join(timeout=30)
+        with self._lock:
+            self._checkpoint_unlocked()
+            if self._wal_fp is not None and not self._wal_fp.closed:
+                self._wal_fp.close()
+                self._wal_fp = None
 
     @contextmanager
     def latest(self):
@@ -251,9 +396,14 @@ class ProfilesData:
             if (entry, original_uuid) in self.entry_uuid_to_profile:
                 raise ValueError(f"(Entry, UUID) 组合 ('{entry}', '{original_uuid}') 已存在")
 
-            self.profile_to_record[profile] = (entry, original_uuid, name, "")
-            self._index_record(profile, entry, original_uuid, name, "")
-            self._save_unlocked()
+            self._set_record_unlocked(profile, entry, original_uuid, name, "")
+            self._append_wal_unlocked({
+                "op": "add",
+                "profile": profile,
+                "entry": entry,
+                "uuid": original_uuid,
+                "name": name,
+            })
 
     def update_name_by_profile(self, profile: str, new_name: str):
         """通过 Profile 更新对应的 Name。"""
@@ -266,10 +416,15 @@ class ProfilesData:
             if new_name == old_name:
                 return
 
-            self._remove_name_index(profile, old_name)
-            self.profile_to_record[profile] = (entry, original_uuid, new_name, bind)
-            self.name_to_profiles.setdefault(new_name, set()).add(profile)
-            self._save_unlocked()
+            self._set_record_unlocked(profile, entry, original_uuid, new_name, bind)
+            self._append_wal_unlocked({
+                "op": "update_name",
+                "profile": profile,
+                "entry": entry,
+                "uuid": original_uuid,
+                "name": new_name,
+                "bind": bind,
+            })
 
     def update_bind_by_profile(self, profile: str, bind: str):
         """通过 Profile 更新对应的 Bind。"""
@@ -282,12 +437,15 @@ class ProfilesData:
             if bind == old_bind:
                 return
 
-            self.profile_to_record[profile] = (entry, original_uuid, name, bind)
-            if bind:
-                self.bound_profiles.add(profile)
-            else:
-                self.bound_profiles.discard(profile)
-            self._save_unlocked()
+            self._set_record_unlocked(profile, entry, original_uuid, name, bind)
+            self._append_wal_unlocked({
+                "op": "update_bind",
+                "profile": profile,
+                "entry": entry,
+                "uuid": original_uuid,
+                "name": name,
+                "bind": bind,
+            })
 
     def clear_bind_by_profile(self, profile: str):
         """通过 Profile 清空对应的 Bind。"""
