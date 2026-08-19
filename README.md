@@ -12,6 +12,7 @@ MultiJoin 是一个面向 Minecraft Velocity 代理端的轻量级 `hasJoined` �
 - 可通过 `alwaysFormat` 强制所有入口都使用统一命名格式。
 - 向 profile properties 追加 `multijoin` 元数据，便于其他插件识别来源。
 - 提供绑定功能，可将一个入口的 profile 绑定到另一个已存在 profile。
+- 支持按入口配置 UUID 白名单，限制只有指定玩家才能通过某入口登录。
 
 ## 安装
 
@@ -68,6 +69,8 @@ python main.py
 0.0.0.0:2268
 ```
 
+启动时会打印白名单配置状态。若 `whitelist.txt` 不存在或为空，则所有入口放行。
+
 再启动 Velocity，并将 Mojang session server 指向 MultiJoin：
 
 ```bash
@@ -81,6 +84,33 @@ Velocity 配置中需要启用 `online-mode`。如果 MultiJoin 和 Velocity 不
 绑定功能用于把一个 MultiJoin profile 指向另一个已存在 profile。典型用途是让同一个玩家从不同入口登录时，在后端服务器表现为同一个 UUID。
 
 在 Velocity 代理端安装 [MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) 以使用绑定功能。请在 `config.toml` 中设置强 `key`，并确保只有可信插件或服务可以访问 MultiJoin。
+
+## 白名单
+
+白名单功能用于按入口限制只有指定 UUID 的玩家才能通过该入口登录。配置文件为项目根目录的 `whitelist.txt`，格式为 INI 风格的段，每个段头对应 `config.toml` 中的一个入口 `id`：
+
+```text
+[union]  # union 入口白名单
+4845a2d91444325caa4e772f16e04762  # 玩家 A
+588a5182b704380b87cf295b0d1e39c6  # 玩家 B
+
+[mojang]
+a94c19ea783b41eb87921e5f256be9dd
+```
+
+- 每行一个 UUID，可带或不带连字符，大小写不敏感。
+- `#` 之后的内容视为注释，可写在行首或行中，空行会被忽略。
+- 若某入口没有对应的段，则该入口不做白名单限制（放行所有）。
+- 若某入口有对应的段但为空，则该入口拒绝所有人。
+- **支持热读取**：修改 `whitelist.txt` 后无需重启服务，MultiJoin 会在下一次请求时自动重新加载。
+
+当某个入口返回了 200 响应但返回的 UUID 不在该入口的白名单中时，MultiJoin 会跳过该响应并继续尝试其他入口。控制台会打印 `[DENY]` 日志记录被拒绝的登录。
+
+可参考 `whitelist.example.txt` 创建自己的白名单文件：
+
+```bash
+cp whitelist.example.txt whitelist.txt
+```
 
 ## API
 

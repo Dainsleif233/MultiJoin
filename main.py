@@ -13,8 +13,11 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from libs.config import load_always_format, load_entries, load_key, load_token_expires_in, MAX_PROFILE_NAME_LENGTH
 from libs.data import ProfilesData
+from libs.whitelist import Whitelist
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 PROFILES = ProfilesData(PROFILES_PATH)
+WHITELIST_PATH = Path(__file__).resolve().parent / "whitelist.txt"
+WHITELIST = Whitelist(WHITELIST_PATH)
 ALWAYS_FORMAT = load_always_format()
 KEY = load_key()
 TOKEN_EXPIRES_IN = load_token_expires_in()
@@ -76,6 +79,11 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             parsed_data = json.loads(response_data.decode("utf-8"))
                         except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        # 白名单检查: entry 配置了白名单且 UUID 不在其中则跳过, 继续尝试其他入口。
+                        response_uuid = parsed_data.get("id", "") if isinstance(parsed_data, dict) else ""
+                        if not WHITELIST.is_allowed(entry_id, response_uuid):
+                            print(f"[DENY] entry={entry_id} uuid={short_id(response_uuid)} not in whitelist")
                             continue
                         winner_id = entry_id
                         winner_data = parsed_data
@@ -477,6 +485,11 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", 2268), Handler)
     print("Server running on port 2268")
+    whitelist_entries = WHITELIST.configured_entries()
+    if whitelist_entries:
+        print(f"[WHITELIST] 已配置白名单的入口: {', '.join(sorted(whitelist_entries))}")
+    else:
+        print("[WHITELIST] 未配置白名单 (whitelist.txt 不存在或为空), 所有入口放行")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

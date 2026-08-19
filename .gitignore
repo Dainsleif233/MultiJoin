@@ -3,5 +3,7 @@ __pycache__/
 profiles.csv
 profiles.wal
 config.toml
+whitelist.txt
 CLAUDE.md
 .claude/
+test/

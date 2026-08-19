@@ -12,6 +12,7 @@ MultiJoin is a lightweight `hasJoined` aggregation service for Minecraft Velocit
 - Can force all entries to use a unified name format with `alwaysFormat`.
 - Adds `multijoin` metadata to profile properties so other plugins can identify the source.
 - Provides a binding feature that can bind one entry's profile to another existing profile.
+- Supports per-entry UUID whitelists to restrict which players can log in through a given entry.
 
 ## Installation
 
@@ -68,6 +69,8 @@ It listens on:
 0.0.0.0:2268
 ```
 
+On startup, the whitelist status is printed. If `whitelist.txt` does not exist or is empty, all entries are allowed.
+
 Then start Velocity and point the Mojang session server to MultiJoin:
 
 ```bash
@@ -81,6 +84,33 @@ Velocity must run with `online-mode` enabled. If MultiJoin and Velocity are not 
 The binding feature maps one MultiJoin profile to another existing profile. A common use case is making the same player appear as the same UUID on backend servers when they log in through different entries.
 
 Install [MultiJoinPlugin](https://modrinth.com/plugin/multijoinplugin) on the Velocity proxy to use the binding feature. Set a strong `key` in `config.toml` and make sure only trusted plugins or services can access MultiJoin.
+
+## Whitelist
+
+The whitelist feature restricts which UUIDs can log in through a given entry. The configuration file is `whitelist.txt` in the project root. It uses INI-style sections, where each section header corresponds to an entry `id` in `config.toml`:
+
+```text
+[union]  # union entry whitelist
+4845a2d91444325caa4e772f16e04762  # player A
+588a5182b704380b87cf295b0d1e39c6  # player B
+
+[mojang]
+a94c19ea783b41eb87921e5f256be9dd
+```
+
+- One UUID per line. UUIDs may include or omit hyphens and are case-insensitive.
+- Everything after `#` is treated as a comment, either at the start or middle of a line. Blank lines are ignored.
+- If an entry has no corresponding section, that entry is not restricted (all players allowed).
+- If an entry has a corresponding section but it is empty, that entry rejects everyone.
+- **Hot reading is supported**: after modifying `whitelist.txt`, MultiJoin automatically reloads it on the next request without restarting.
+
+When an entry returns a 200 response but the returned UUID is not in that entry's whitelist, MultiJoin skips the response and continues trying other entries. A `[DENY]` log is printed for rejected logins.
+
+See `whitelist.example.txt` for a template:
+
+```bash
+cp whitelist.example.txt whitelist.txt
+```
 
 ## API
 

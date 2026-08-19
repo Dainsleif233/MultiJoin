@@ -1,7 +1,16 @@
+# MultiJoin 配置示例
+
+# 是否总是套用 format 命名格式。
+# false: 仅在玩家名冲突时才改名; true: 所有入口统一使用 format。
 alwaysFormat = false
+
+# 绑定功能密钥, 为空时绑定功能不可用。建议设置为足够长的随机字符串。
 key = ""
+
+# 绑定 token 有效期 (秒)。
 tokenExpiresIn = 600
 
+# 登录入口, 可配置多个; id 必须唯一, api 不含查询参数, format 必须包含 {name}。
 [[entries]]
 id = "union"
 api = "https://skin.mualliance.ltd/api/union/yggdrasil/sessionserver/session/minecraft/hasJoined"
