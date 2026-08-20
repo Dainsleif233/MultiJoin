@@ -6,6 +6,7 @@
 级别分流:
 - INFO      → stdout (启动、审计、生命周期)
 - WARNING+  → stderr (可降级运营事件、自身故障)
+- 全部 INFO+ → 当次启动专属日志文件 (logs/<启动时间>.log)
 
 设 propagate=False, 不冒泡到根 logger, 避免波及 httpx 等第三方库的日志输出。
 
@@ -15,8 +16,14 @@
 """
 import logging
 import sys
+from datetime import datetime
+from pathlib import Path
 
 LOGGER_NAME = "MJ"
+
+# 日志目录与文件名: 每次进程启动用启动时间生成一个新文件, 不滚动。
+# 文件名形如 2026-08-20_20-30-15.log (用 _ 替代 : 避免 Windows 非法字符)。
+_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 
 
 class _BelowWarning(logging.Filter):
@@ -43,6 +50,22 @@ def _build_logger() -> logging.Logger:
     stderr_handler.setFormatter(formatter)
     log.addHandler(stdout_handler)
     log.addHandler(stderr_handler)
+
+    # 追加文件 handler: 每次启动一个新文件, 文件名为启动时间。
+    # 目录创建失败时降级为只控制台输出, 不阻断服务启动。
+    try:
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
+        log_path = _LOG_DIR / log_filename
+        file_handler = logging.FileHandler(log_path, encoding="utf-8", delay=True)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        log.addHandler(file_handler)
+    except OSError:
+        # 控制台已就绪, 用它提示文件落盘失败; 此时 logger 尚未完全建好,
+        # 但 stderr handler 已挂上, warning 能输出到 stderr。
+        log.warning(f"[LOG] 无法创建日志目录 {_LOG_DIR}, 仅输出到控制台")
+
     log.setLevel(logging.INFO)
     log.propagate = False
     return log

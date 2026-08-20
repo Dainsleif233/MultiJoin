@@ -7,3 +7,4 @@ whitelist.txt
 CLAUDE.md
 .claude/
 test/
+logs/
