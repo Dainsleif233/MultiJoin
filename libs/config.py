@@ -25,32 +25,28 @@ def load_config(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> dict
     return config
 
 
-def load_always_format(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> bool:
-    config = load_config(filepath)
+def _validate_always_format(config: dict) -> bool:
     always_format = config.get("alwaysFormat", False)
     if not isinstance(always_format, bool):
         raise ValueError("Config 'alwaysFormat' must be a boolean")
     return always_format
 
 
-def load_key(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> str:
-    config = load_config(filepath)
+def _validate_key(config: dict) -> str:
     key = config.get("key", "")
     if not isinstance(key, str):
         raise ValueError("Config 'key' must be a string")
     return key
 
 
-def load_token_expires_in(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> int:
-    config = load_config(filepath)
+def _validate_token_expires_in(config: dict) -> int:
     token_expires_in = config.get("tokenExpiresIn", 600)
     if isinstance(token_expires_in, bool) or not isinstance(token_expires_in, int) or token_expires_in <= 0:
         raise ValueError("Config 'tokenExpiresIn' must be a positive integer")
     return token_expires_in
 
 
-def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dict[str, Dict[str, str]]:
-    config = load_config(filepath)
+def _validate_entries(config: dict) -> Dict[str, Dict[str, str]]:
     entries = config.get("entries")
     if not isinstance(entries, list) or not entries:
         raise ValueError("Config must contain at least one [[entries]] table")
@@ -104,3 +100,30 @@ def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dic
         }
 
     return result
+
+
+def load_all(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> dict:
+    """一次性加载并校验全部配置, 避免多次打开/解析同一 TOML 文件。"""
+    config = load_config(filepath)
+    return {
+        "always_format": _validate_always_format(config),
+        "key": _validate_key(config),
+        "token_expires_in": _validate_token_expires_in(config),
+        "entries": _validate_entries(config),
+    }
+
+
+def load_always_format(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> bool:
+    return _validate_always_format(load_config(filepath))
+
+
+def load_key(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> str:
+    return _validate_key(load_config(filepath))
+
+
+def load_token_expires_in(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> int:
+    return _validate_token_expires_in(load_config(filepath))
+
+
+def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dict[str, Dict[str, str]]:
+    return _validate_entries(load_config(filepath))

@@ -3,6 +3,7 @@ import sys
 import uuid
 import json
 import string
+import hmac
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -11,17 +12,19 @@ from typing import Dict, Union
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from libs.config import load_always_format, load_entries, load_key, load_token_expires_in, MAX_PROFILE_NAME_LENGTH
+from libs.config import load_all, MAX_PROFILE_NAME_LENGTH
 from libs.data import ProfilesData
 from libs.whitelist import Whitelist
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 PROFILES = ProfilesData(PROFILES_PATH)
 WHITELIST_PATH = Path(__file__).resolve().parent / "whitelist.txt"
 WHITELIST = Whitelist(WHITELIST_PATH)
-ALWAYS_FORMAT = load_always_format()
-KEY = load_key()
-TOKEN_EXPIRES_IN = load_token_expires_in()
-ENTRIES = load_entries()
+# 一次性加载并校验全部配置, 避免反复打开/解析同一个 TOML 文件。
+_CFG = load_all()
+ALWAYS_FORMAT = _CFG["always_format"]
+KEY = _CFG["key"]
+TOKEN_EXPIRES_IN = _CFG["token_expires_in"]
+ENTRIES = _CFG["entries"]
 
 # 常驻 fan-out 线程池, 避免每个 hasJoined 请求 new/shutdown 一个 executor。
 # 池大小按 entry 数放大, 支撑多请求并发 fan-out。
@@ -58,15 +61,17 @@ class Handler(BaseHTTPRequestHandler):
 
             winner_id = None
             winner_data = None
-            winner_headers = {}
+            winner_headers = []
 
             def fetch_target(entry_id, target_url):
                 client = ENTRY_CLIENTS[entry_id]
                 try:
                     response = client.get(target_url)
-                    return entry_id, response.status_code, response.content, dict(response.headers)
-                except httpx.RequestError:
-                    return entry_id, None, b"", {}
+                    # multi_items 保留同名重复头 (如多个 Set-Cookie), dict() 只会保留最后一个。
+                    return entry_id, response.status_code, response.content, list(response.headers.multi_items())
+                except Exception as exc:  # noqa: BLE001 - 单个入口故障不得拖垮整个 fan-out
+                    print(f"[FETCH] entry={entry_id} error: {type(exc).__name__}: {exc}")
+                    return entry_id, None, b"", []
 
             future_map = {
                 FETCH_EXECUTOR.submit(fetch_target, entry_id, target_url): entry_id
@@ -80,8 +85,16 @@ class Handler(BaseHTTPRequestHandler):
                             parsed_data = json.loads(response_data.decode("utf-8"))
                         except (UnicodeDecodeError, json.JSONDecodeError):
                             continue
+                        # 结构校验: hasJoined 响应必须是含非空 id/name 的对象;
+                        # properties 可缺失 (部分 Yggdrasil 实现对无皮肤玩家不返回该字段),
+                        # 在 handleProfile 中按需补齐为空列表, 故此处不强制要求。
+                        if (not isinstance(parsed_data, dict)
+                                or not isinstance(parsed_data.get("id"), str) or not parsed_data.get("id")
+                                or not isinstance(parsed_data.get("name"), str) or not parsed_data.get("name")):
+                            print(f"[WARN] malformed profile from entry={entry_id}, skipping")
+                            continue
                         # 白名单检查: entry 配置了白名单且 UUID 不在其中则跳过, 继续尝试其他入口。
-                        response_uuid = parsed_data.get("id", "") if isinstance(parsed_data, dict) else ""
+                        response_uuid = parsed_data["id"]
                         if not WHITELIST.is_allowed(entry_id, response_uuid):
                             print(f"[DENY] entry={entry_id} uuid={short_id(response_uuid)} not in whitelist")
                             continue
@@ -111,9 +124,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        body = b'{"path": "/hasJoined"}'
         self.send_response(405)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(b'{"path": "/hasJoined"}')
+        self.wfile.write(body)
 
 def send_text(conn: Handler, status_code: int, message: str = ""):
     response_body = message.encode("utf-8")
@@ -188,7 +204,7 @@ def handle_bind(conn: Handler, query: str):
         send_text(conn, 400, "invalid action")
         log_bind_result(action, pid, 400, "invalid action", client=client_host(conn))
         return
-    if not KEY or key != KEY:
+    if not KEY or key is None or not hmac.compare_digest(key.encode("utf-8"), KEY.encode("utf-8")):
         send_text(conn, 403, "invalid key")
         log_bind_result(action, pid, 403, "invalid key", client=client_host(conn))
         return
@@ -398,7 +414,7 @@ def log_profile_result(entry_id, original_name, original_uuid, profile_id, final
         f"uuid={short_id(original_uuid)} profile={short_id(profile_id)} actions={action_text}"
     )
 
-def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]], winner_headers: Dict[str, str]):
+def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]], winner_headers: list):
     original_name = profile["name"]
     original_uuid = profile["id"]
     actions = []
@@ -410,6 +426,9 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
         if pid == None:
             actions.append("new")
             # 先算出最终 name, 再一次性入库, 避免先 add 原始名再 update 的两次写盘。
+            # 此时 pid 为 None: make_unique_entry_name 内部以 exists_name_except_profile(pid, ...)
+            # 检查名字是否被"其他 profile"占用, None 不等于任何真实 profile id, 故等价于
+            # 检查该名字是否已被任意 profile 占用, 正是新记录所需的语义。
             if ALWAYS_FORMAT or data.exists_name(profile["name"]):
                 name = make_unique_entry_name(data, pid, entry_id, profile["name"])
                 if ALWAYS_FORMAT:
@@ -453,6 +472,9 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
         "name": "multijoin",
         "value": json.dumps(multijoin_data, ensure_ascii=False)
     }
+    # properties 可缺失 (部分上游对无皮肤玩家不返回该字段), 缺失或非 list 时补齐为空列表再追加元数据。
+    if not isinstance(profile.get("properties"), list):
+        profile["properties"] = []
     profile["properties"].append(multijoin)
 
     response_body = json.dumps(profile).encode("utf-8")
@@ -471,7 +493,7 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
     # print(f"Response headers: {winner_headers}")
     # print(f"Response profile: {json.dumps(profile, ensure_ascii=False)}")
     conn.send_response(200)
-    for header_name, header_value in winner_headers.items():
+    for header_name, header_value in winner_headers:
         if header_name.lower() in hop_by_hop_headers:
             continue
         if header_name.lower() == "content-type":
@@ -489,7 +511,7 @@ if __name__ == "__main__":
     if whitelist_entries:
         print(f"[WHITELIST] 已配置白名单的入口: {', '.join(sorted(whitelist_entries))}")
     else:
-        print("[WHITELIST] 未配置白名单 (whitelist.txt 不存在或为空), 所有入口放行")
+        print("[WHITELIST] 未配置白名单, 所有入口放行")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

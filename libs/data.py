@@ -22,6 +22,10 @@ class ProfilesData:
     """
 
     HEADER = ["Profile", "Entry", "UUID", "Name", "Bind"]
+    # 同一文件路径的多个 ProfilesData 实例共享下面 _locks 里的同一把 RLock, 保证内存
+    # 索引互斥; 但 WAL 追加句柄 (_wal_fp) 是实例私有的。若两个活跃实例同时操作同一
+    # 文件, 一个实例 checkpoint 截断 WAL 时另一个仍持有旧的 append 偏移, 会写出 NUL
+    # 空洞导致 WAL 腹败。因此同一文件同一时刻只允许一个活跃 ProfilesData 实例。
     _locks_guard = threading.Lock()
     _locks = {}
 
