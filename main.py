@@ -14,7 +14,11 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from libs.config import load_all, MAX_PROFILE_NAME_LENGTH
 from libs.data import ProfilesData
+from libs.log import get_logger
 from libs.whitelist import Whitelist
+
+logger = get_logger()
+
 PROFILES_PATH = Path(__file__).resolve().parent / "profiles.csv"
 PROFILES = ProfilesData(PROFILES_PATH)
 WHITELIST_PATH = Path(__file__).resolve().parent / "whitelist.txt"
@@ -54,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
             query_suffix = self.path[len("/hasJoined"):]
             targets = {entry_id: f"{entry['api']}{query_suffix}" for entry_id, entry in ENTRIES.items()}
             if not targets:
-                print("[WARN] No entries configured")
+                logger.warning("[WARN] No entries configured")
                 self.send_response(204)
                 self.end_headers()
                 return
@@ -70,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
                     # multi_items 保留同名重复头 (如多个 Set-Cookie), dict() 只会保留最后一个。
                     return entry_id, response.status_code, response.content, list(response.headers.multi_items())
                 except Exception as exc:  # noqa: BLE001 - 单个入口故障不得拖垮整个 fan-out
-                    print(f"[FETCH] entry={entry_id} error: {type(exc).__name__}: {exc}")
+                    logger.warning(f"[FETCH] entry={entry_id} error: {type(exc).__name__}: {exc}")
                     return entry_id, None, b"", []
 
             future_map = {
@@ -91,12 +95,12 @@ class Handler(BaseHTTPRequestHandler):
                         if (not isinstance(parsed_data, dict)
                                 or not isinstance(parsed_data.get("id"), str) or not parsed_data.get("id")
                                 or not isinstance(parsed_data.get("name"), str) or not parsed_data.get("name")):
-                            print(f"[WARN] malformed profile from entry={entry_id}, skipping")
+                            logger.warning(f"[WARN] malformed profile from entry={entry_id}, skipping")
                             continue
                         # 白名单检查: entry 配置了白名单且 UUID 不在其中则跳过, 继续尝试其他入口。
                         response_uuid = parsed_data["id"]
                         if not WHITELIST.is_allowed(entry_id, response_uuid):
-                            print(f"[DENY] entry={entry_id} uuid={short_id(response_uuid)} not in whitelist")
+                            logger.warning(f"[DENY] entry={entry_id} uuid={short_id(response_uuid)} not in whitelist")
                             continue
                         winner_id = entry_id
                         winner_data = parsed_data
@@ -116,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                 # print(f"Winner data: {json.dumps(winner_data, ensure_ascii=False)}")
                 handleProfile(self, winner_id, winner_data, winner_headers)
             else:
-                print(f"[MISS] No valid response: {self.path}")
+                logger.warning(f"[MISS] No valid response: {self.path}")
                 self.send_response(204)
                 self.end_headers()
         else:
@@ -401,7 +405,7 @@ def log_bind_result(action, pid, status_code, reason="", **details):
     )
     reason_text = f" reason={reason}" if reason else ""
     detail_text = f" {detail_text}" if detail_text else ""
-    print(
+    logger.info(
         f"[BIND] action={action or '-'} status={status_code} "
         f"profile={short_id(pid)}{reason_text}{detail_text}"
     )
@@ -409,7 +413,7 @@ def log_bind_result(action, pid, status_code, reason="", **details):
 def log_profile_result(entry_id, original_name, original_uuid, profile_id, final_name, actions):
     action_text = ",".join(actions) if actions else "existing"
     rename_text = f" name={original_name}->{final_name}" if original_name != final_name else f" name={final_name}"
-    print(
+    logger.info(
         f"[JOIN] entry={entry_id}{rename_text} "
         f"uuid={short_id(original_uuid)} profile={short_id(profile_id)} actions={action_text}"
     )
@@ -506,16 +510,16 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
 
 if __name__ == "__main__":
     server = ThreadingHTTPServer(("0.0.0.0", 2268), Handler)
-    print("Server running on port 2268")
+    logger.info("Server running on port 2268")
     whitelist_entries = WHITELIST.configured_entries()
     if whitelist_entries:
-        print(f"[WHITELIST] 已配置白名单的入口: {', '.join(sorted(whitelist_entries))}")
+        logger.info(f"[WHITELIST] 已配置白名单的入口: {', '.join(sorted(whitelist_entries))}")
     else:
-        print("[WHITELIST] 未配置白名单, 所有入口放行")
+        logger.info("[WHITELIST] 未配置白名单, 所有入口放行")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nServer stopped")
+        logger.info("Server stopped")
     finally:
         server.server_close()
         PROFILES.close()

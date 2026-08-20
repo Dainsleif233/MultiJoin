@@ -8,6 +8,10 @@ from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
+from libs.log import get_logger
+
+logger = get_logger()
+
 
 class ProfilesData:
     """
@@ -182,10 +186,11 @@ class ProfilesData:
         try:
             os.replace(temp_path, self.filepath)
         except OSError:
-            print(
+            logger.error(
                 f"[DATA] Failed to persist profiles to {self.filepath}, "
                 f"data saved to temporary file {temp_path}. "
                 f"Error: {sys.exc_info()[1]}",
+                exc_info=True,
             )
             # 不回滚内存: WAL 模式下内存是权威源, 回滚会丢失已确认的 WAL 写。
             # 保留 dirty, 下次 checkpoint 重试; CSV 落后但完整。
@@ -287,13 +292,13 @@ class ProfilesData:
                 with self._lock:
                     self._checkpoint_unlocked()
             except Exception as e:  # noqa: BLE001 - 后台线程不能因单次失败退出
-                print(f"[DATA] background checkpoint failed: {e}")
+                logger.error(f"[DATA] background checkpoint failed: {e}", exc_info=True)
         # 退出前最后落盘
         try:
             with self._lock:
                 self._checkpoint_unlocked()
         except Exception as e:  # noqa: BLE001
-            print(f"[DATA] final checkpoint failed: {e}")
+            logger.error(f"[DATA] final checkpoint failed: {e}", exc_info=True)
 
     def _start_flush_thread(self):
         self._flush_thread = threading.Thread(
