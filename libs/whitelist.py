@@ -3,10 +3,19 @@ import threading
 from pathlib import Path
 from typing import Dict, Set
 
+from libs.log import get_logger
+
+logger = get_logger()
+
 
 def _normalize_uuid(value: str) -> str:
     """规范化 UUID: 去除连字符并转小写, 便于比较。"""
     return value.replace("-", "").strip().lower()
+
+
+def _is_valid_normalized_uuid(value: str) -> bool:
+    """规范化后的 UUID 应为 32 位十六进制字符 (Minecraft 离线/在线 UUID 均为此长度)。"""
+    return len(value) == 32 and all(c in "0123456789abcdef" for c in value)
 
 
 class Whitelist:
@@ -54,7 +63,7 @@ class Whitelist:
         if sig is not None:
             current_section = None
             with open(self.filepath, "r", encoding="utf-8") as f:
-                for raw_line in f:
+                for line_number, raw_line in enumerate(f, start=1):
                     # 行内注释: '#' 之后的内容全部忽略, 再去除首尾空白。
                     line = raw_line.split("#", 1)[0].strip()
                     if not line:
@@ -64,13 +73,27 @@ class Whitelist:
                         if current_section:
                             entries.setdefault(current_section, set())
                         else:
+                            # 空段头 "[ ]" 几乎肯定是笔误, 提示而不是静默忽略。
+                            logger.warning(
+                                f"[WHITELIST] {self.filepath}:{line_number} empty section header, ignored"
+                            )
                             current_section = None
                         continue
                     if current_section is None:
+                        # 段外的 UUID 行 (没有任何 [entry] 包裹) 不会生效, 提示以便发现
+                        # 漏写段头或顺序错误。
+                        logger.warning(
+                            f"[WHITELIST] {self.filepath}:{line_number} line outside any section, ignored: {line!r}"
+                        )
                         continue
                     normalized = _normalize_uuid(line)
-                    if normalized:
-                        entries[current_section].add(normalized)
+                    if not _is_valid_normalized_uuid(normalized):
+                        # 非法 UUID (长度/字符不对) 多为拼写错误, 原先静默忽略, 现提示。
+                        logger.warning(
+                            f"[WHITELIST] {self.filepath}:{line_number} invalid UUID in [{current_section}], ignored: {line!r}"
+                        )
+                        continue
+                    entries[current_section].add(normalized)
         self._entries = entries
         self._loaded_sig = sig
 

@@ -6,6 +6,7 @@ import string
 import hmac
 import threading
 import time
+import signal
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict, Union
@@ -38,6 +39,9 @@ FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=FETCH_WORKERS, thread_name_prefi
 # httpx.Client 线程安全, 可被多个 fan-out 线程共享。
 FETCH_TIMEOUT = httpx.Timeout(5.0)
 FETCH_LIMITS = httpx.Limits(max_connections=16, max_keepalive_connections=8)
+# 单个上游 hasJoined 响应体上限 (字节)。hasJoined profile 通常很小; 超限视为异常入口,
+# 避免恶意/故障上游用超大 body 拖垮 fan-out 线程内存。
+MAX_RESPONSE_BYTES = 1_048_576  # 1 MiB
 ENTRY_CLIENTS = {
     entry_id: httpx.Client(timeout=FETCH_TIMEOUT, limits=FETCH_LIMITS, follow_redirects=True)
     for entry_id in ENTRIES
@@ -70,9 +74,30 @@ class Handler(BaseHTTPRequestHandler):
             def fetch_target(entry_id, target_url):
                 client = ENTRY_CLIENTS[entry_id]
                 try:
-                    response = client.get(target_url)
-                    # multi_items 保留同名重复头 (如多个 Set-Cookie), dict() 只会保留最后一个。
-                    return entry_id, response.status_code, response.content, list(response.headers.multi_items())
+                    # 流式读取并设字节上限, 防止异常上游用超大响应耗尽内存。
+                    # 用 stream 而非 get, 以便在累计超限时立即中止, 不把整个 body 读入内存。
+                    with client.stream("GET", target_url) as response:
+                        chunks = []
+                        total = 0
+                        too_large = False
+                        for chunk in response.iter_bytes():
+                            total += len(chunk)
+                            if total > MAX_RESPONSE_BYTES:
+                                too_large = True
+                                break
+                            chunks.append(chunk)
+                        if too_large:
+                            logger.warning(
+                                f"[FETCH] entry={entry_id} response exceeded {MAX_RESPONSE_BYTES} bytes, aborted"
+                            )
+                            return entry_id, None, b"", []
+                        # multi_items 保留同名重复头 (如多个 Set-Cookie), dict() 只会保留最后一个。
+                        return (
+                            entry_id,
+                            response.status_code,
+                            b"".join(chunks),
+                            list(response.headers.multi_items()),
+                        )
                 except Exception as exc:  # noqa: BLE001 - 单个入口故障不得拖垮整个 fan-out
                     logger.warning(f"[FETCH] entry={entry_id} error: {type(exc).__name__}: {exc}")
                     return entry_id, None, b"", []
@@ -118,7 +143,20 @@ class Handler(BaseHTTPRequestHandler):
             if winner_id is not None:
                 # print(f"Winner headers: {winner_headers}")
                 # print(f"Winner data: {json.dumps(winner_data, ensure_ascii=False)}")
-                handleProfile(self, winner_id, winner_data, winner_headers)
+                try:
+                    handleProfile(self, winner_id, winner_data, winner_headers)
+                except Exception:
+                    # handleProfile 在 end_headers 前抛异常时尚未向客户端写任何字节,
+                    # 这里清掉残留的 200 状态行缓冲并回 500, 避免连接被直接重置 + 裸 traceback。
+                    logger.error(
+                        f"[ERROR] hasJoined handling failed entry={winner_id}: {sys.exc_info()[1]}",
+                        exc_info=True,
+                    )
+                    self._headers_buffer = []
+                    try:
+                        send_text(self, 500, "internal error")
+                    except Exception:
+                        pass
             else:
                 logger.warning(f"[MISS] No valid response: {self.path}")
                 self.send_response(204)
@@ -233,6 +271,19 @@ def handle_bind(conn: Handler, query: str):
     except KeyError:
         send_text(conn, 404, "profile not found")
         log_bind_result(action, pid, 404, "profile not found", client=client_host(conn))
+    except Exception:
+        # 非 KeyError 的意外 (如数据层 OSError): 记录并回 500, 不让异常冒到 socketserver
+        # 导致连接重置 + 裸 traceback。各分支在抛异常前尚未 send_text, 故可直接补发。
+        logger.error(
+            f"[ERROR] bind handling failed action={action} pid={short_id(pid)}: {sys.exc_info()[1]}",
+            exc_info=True,
+        )
+        conn._headers_buffer = []
+        try:
+            send_text(conn, 500, "internal error")
+            log_bind_result(action, pid, 500, "internal error", client=client_host(conn))
+        except Exception:
+            pass
 
 def handle_bind_token(conn: Handler, data: ProfilesData, pid: str):
     with data.latest():
@@ -427,7 +478,7 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
     data = PROFILES
     with data.latest():
         pid = data.query_profile_by_entry_uuid(entry_id, original_uuid)
-        if pid == None:
+        if pid is None:
             actions.append("new")
             # 先算出最终 name, 再一次性入库, 避免先 add 原始名再 update 的两次写盘。
             # 此时 pid 为 None: make_unique_entry_name 内部以 exists_name_except_profile(pid, ...)
@@ -482,7 +533,11 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
     profile["properties"].append(multijoin)
 
     response_body = json.dumps(profile).encode("utf-8")
-    hop_by_hop_headers = {
+    # 既要剥 hop-by-hop 头, 也要剥会与已解压 body 矛盾的实体头:
+    # httpx 按 content-encoding 自动解压 response.content, 但响应头仍保留 content-encoding,
+    # 原样转发会让 Velocity 收到 "声明 gzip 的明文 JSON" 而解析失败。
+    # content-length 同理 (上游的是编码后长度, 与我们重算的明文长度不符)。
+    strip_headers = {
         "connection",
         "keep-alive",
         "proxy-authenticate",
@@ -492,13 +547,14 @@ def handleProfile(conn: Handler, entry_id, profile: Dict[str, Union[str, list]],
         "transfer-encoding",
         "upgrade",
         "content-length",
+        "content-encoding",
     }
 
     # print(f"Response headers: {winner_headers}")
     # print(f"Response profile: {json.dumps(profile, ensure_ascii=False)}")
     conn.send_response(200)
     for header_name, header_value in winner_headers:
-        if header_name.lower() in hop_by_hop_headers:
+        if header_name.lower() in strip_headers:
             continue
         if header_name.lower() == "content-type":
             continue
@@ -516,6 +572,27 @@ if __name__ == "__main__":
         logger.info(f"[WHITELIST] 已配置白名单的入口: {', '.join(sorted(whitelist_entries))}")
     else:
         logger.info("[WHITELIST] 未配置白名单, 所有入口放行")
+
+    # SIGTERM/SIGINT 触发优雅关闭。signal 处理器运行在主线程 (即 serve_forever 所在线程),
+    # 直接调 server.shutdown() 会自等待死锁, 故另起一个线程执行 shutdown() 让 serve_forever 退出,
+    # 随后由 finally 做最终 checkpoint/资源关闭。
+    def _request_shutdown(signum, _frame):
+        logger.info(f"Received signal {signum}, shutting down")
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    installed_signals = []
+    for _sig_name in ("SIGINT", "SIGTERM"):
+        _sig = getattr(signal, _sig_name, None)
+        if _sig is not None:
+            try:
+                signal.signal(_sig, _request_shutdown)
+                installed_signals.append(_sig_name)
+            except (ValueError, OSError):
+                # 非主线程或平台不支持时忽略, 回退到 KeyboardInterrupt
+                pass
+    if installed_signals:
+        logger.info(f"[SIGNAL] 已注册优雅关闭信号: {', '.join(installed_signals)}")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

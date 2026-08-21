@@ -111,19 +111,3 @@ def load_all(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> dict:
         "token_expires_in": _validate_token_expires_in(config),
         "entries": _validate_entries(config),
     }
-
-
-def load_always_format(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> bool:
-    return _validate_always_format(load_config(filepath))
-
-
-def load_key(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> str:
-    return _validate_key(load_config(filepath))
-
-
-def load_token_expires_in(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> int:
-    return _validate_token_expires_in(load_config(filepath))
-
-
-def load_entries(filepath: Union[str, os.PathLike] = DEFAULT_CONFIG_PATH) -> Dict[str, Dict[str, str]]:
-    return _validate_entries(load_config(filepath))
